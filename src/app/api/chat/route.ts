@@ -1,5 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "@/lib/supabase/server";
+import { type NextRequest } from "next/server";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 type UserLike = { id?: unknown };
 
@@ -94,6 +98,220 @@ function buildSupabaseAdmin() {
   return createClient(url, service);
 }
 
+type LocalAuthDb = { users: { id: string; email: string }[]; sessions: { token: string; user_id: string }[] };
+type LocalProfileDb = { profiles: { user_id: string; username: string; phone: string; updated_at: string }[] };
+
+type LocalConversationRow = { id: string; type: ConversationType; title: string; created_at: string };
+type LocalConversationMemberRow = { conversation_id: string; user_id: string; created_at: string };
+type LocalMessageRow = { id: string; conversation_id: string; sender_id: string; body: string; created_at: string };
+type LocalChatDb = { conversations: LocalConversationRow[]; members: LocalConversationMemberRow[]; messages: LocalMessageRow[] };
+
+function isLocalMode() {
+  const v = String(process.env.ZOHOR_LOCAL_MODE || "").trim();
+  return v === "1" || v.toLowerCase() === "true";
+}
+
+function isFetchDownError(e: unknown) {
+  const m = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  const low = String(m || "").toLowerCase();
+  return low.includes("fetch failed") || low.includes("enotfound") || low.includes("name_not_resolved") || low.includes("nxdomain");
+}
+
+function isMissingEnvError(e: unknown) {
+  const m = e instanceof Error ? e.message : typeof e === "string" ? e : "";
+  return String(m || "").toLowerCase().includes("missing env:");
+}
+
+function dataDir() {
+  return path.join(process.cwd(), ".local-data");
+}
+
+function authDbPath() {
+  return path.join(dataDir(), "auth.json");
+}
+
+function profileDbPath() {
+  return path.join(dataDir(), "profiles.json");
+}
+
+function chatDbPath() {
+  return path.join(dataDir(), "chat.json");
+}
+
+function nowIso() {
+  try {
+    return new Date().toISOString();
+  } catch {
+    return "";
+  }
+}
+
+async function readJsonFile<T>(p: string, fallback: T): Promise<T> {
+  try {
+    const raw = await fs.readFile(p, "utf8");
+    const parsed = JSON.parse(raw) as T;
+    return parsed || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJsonFile<T>(p: string, data: T) {
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.writeFile(p, JSON.stringify(data, null, 2), "utf8");
+}
+
+async function readLocalAuthDb(): Promise<LocalAuthDb> {
+  await fs.mkdir(dataDir(), { recursive: true });
+  const db = await readJsonFile<Partial<LocalAuthDb>>(authDbPath(), {});
+  const users = Array.isArray(db.users)
+    ? db.users.map((u) => ({ id: String((u as { id?: unknown }).id || ""), email: String((u as { email?: unknown }).email || "") })).filter((u) => u.id && u.email)
+    : [];
+  const sessions = Array.isArray(db.sessions)
+    ? db.sessions
+        .map((s) => ({
+          token: String((s as { token?: unknown }).token || ""),
+          user_id: String((s as { user_id?: unknown }).user_id || ""),
+        }))
+        .filter((s) => s.token && s.user_id)
+    : [];
+  return { users, sessions };
+}
+
+async function localMe(req: NextRequest) {
+  const token = String(req.cookies.get("zohor_local_session")?.value || "").trim();
+  if (!token) return null;
+  const db = await readLocalAuthDb();
+  const s = db.sessions.find((x) => x.token === token) || null;
+  if (!s) return null;
+  const u = db.users.find((x) => x.id === s.user_id) || null;
+  if (!u) return null;
+  return { id: u.id, email: u.email };
+}
+
+async function readLocalProfileDb(): Promise<LocalProfileDb> {
+  await fs.mkdir(dataDir(), { recursive: true });
+  const db = await readJsonFile<Partial<LocalProfileDb>>(profileDbPath(), {});
+  const profiles = Array.isArray(db.profiles) ? (db.profiles as LocalProfileDb["profiles"]) : [];
+  return { profiles };
+}
+
+async function readLocalChatDb(): Promise<LocalChatDb> {
+  await fs.mkdir(dataDir(), { recursive: true });
+  const db = await readJsonFile<Partial<LocalChatDb>>(chatDbPath(), {});
+  const conversations = Array.isArray(db.conversations) ? (db.conversations as LocalConversationRow[]) : [];
+  const members = Array.isArray(db.members) ? (db.members as LocalConversationMemberRow[]) : [];
+  const messages = Array.isArray(db.messages) ? (db.messages as LocalMessageRow[]) : [];
+  return { conversations, members, messages };
+}
+
+async function writeLocalChatDb(db: LocalChatDb) {
+  await writeJsonFile(chatDbPath(), db);
+}
+
+function safeHexId(bytes = 16) {
+  return randomBytes(Math.max(8, bytes)).toString("hex");
+}
+
+async function localResolvePhone(phone: string) {
+  const db = await readLocalProfileDb();
+  const found = db.profiles.find((p) => normalizePhone(p.phone) === phone) || null;
+  if (!found) return null;
+  return {
+    id: String(found.user_id || "").trim(),
+    username: String(found.username || "").trim(),
+    phone: normalizePhone(String(found.phone || "")),
+  };
+}
+
+async function localListConversations(meId: string) {
+  const db = await readLocalChatDb();
+  const mineIds = new Set(db.members.filter((m) => m.user_id === meId).map((m) => m.conversation_id));
+  const convs = db.conversations.filter((c) => mineIds.has(c.id));
+  const enriched = convs
+    .map((c) => {
+      const last = db.messages
+        .filter((m) => m.conversation_id === c.id)
+        .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
+      return {
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        created_at: c.created_at,
+        last_message: last ? { body: last.body, created_at: last.created_at } : null,
+      };
+    })
+    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  return enriched;
+}
+
+async function localGetMessages(meId: string, conversationId: string) {
+  const db = await readLocalChatDb();
+  const isMember = db.members.some((m) => m.conversation_id === conversationId && m.user_id === meId);
+  if (!isMember) return { ok: false as const, code: "forbidden", message: "غير مسموح." };
+  const list = db.messages
+    .filter((m) => m.conversation_id === conversationId)
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+    .slice(-80);
+  return { ok: true as const, messages: list };
+}
+
+async function localStartDirect(meId: string, phone: string) {
+  const other = await localResolvePhone(phone);
+  const otherId = String(other?.id || "").trim();
+  if (!otherId) return { ok: false as const, code: "not_found", message: "الرقم غير موجود." };
+  if (otherId === meId) return { ok: false as const, code: "bad_request", message: "لا يمكنك بدء محادثة مع نفسك." };
+
+  const db = await readLocalChatDb();
+  const candidates = db.conversations.filter((c) => c.type === "direct");
+  for (const c of candidates) {
+    const memberIds = db.members.filter((m) => m.conversation_id === c.id).map((m) => m.user_id);
+    const uniq = Array.from(new Set(memberIds)).filter(Boolean);
+    if (uniq.length === 2 && uniq.includes(meId) && uniq.includes(otherId)) {
+      return { ok: true as const, conversation_id: c.id };
+    }
+  }
+
+  const cid = safeHexId(16);
+  db.conversations.push({ id: cid, type: "direct", title: "", created_at: nowIso() });
+  const createdAt = nowIso();
+  db.members.push({ conversation_id: cid, user_id: meId, created_at: createdAt });
+  db.members.push({ conversation_id: cid, user_id: otherId, created_at: createdAt });
+  await writeLocalChatDb(db);
+  return { ok: true as const, conversation_id: cid };
+}
+
+async function localCreateGroup(meId: string, title: string, phones: string[]) {
+  const resolved = await Promise.all(phones.map((p) => localResolvePhone(p)));
+  const memberIds = uniq(resolved.filter(Boolean).map((r) => String((r as { id: string }).id || "").trim())).filter(Boolean);
+  const allMembers = uniq([meId, ...memberIds]).filter(Boolean);
+  if (allMembers.length < 2) return { ok: false as const, code: "bad_request", message: "أضف عضو واحد على الأقل." };
+
+  const db = await readLocalChatDb();
+  const cid = safeHexId(16);
+  const createdAt = nowIso();
+  db.conversations.push({ id: cid, type: "group", title, created_at: createdAt });
+  db.members.push(...allMembers.map((uid) => ({ conversation_id: cid, user_id: uid, created_at: createdAt })));
+  await writeLocalChatDb(db);
+  return { ok: true as const, conversation_id: cid };
+}
+
+async function localSendMessage(meId: string, conversationId: string, text: string) {
+  const db = await readLocalChatDb();
+  const isMember = db.members.some((m) => m.conversation_id === conversationId && m.user_id === meId);
+  if (!isMember) return { ok: false as const, code: "forbidden", message: "غير مسموح." };
+  const row: LocalMessageRow = {
+    id: safeHexId(16),
+    conversation_id: conversationId,
+    sender_id: meId,
+    body: text,
+    created_at: nowIso(),
+  };
+  db.messages.push(row);
+  await writeLocalChatDb(db);
+  return { ok: true as const, message: row };
+}
+
 function normalizePhone(raw: string) {
   const s = String(raw || "").trim();
   if (!s) return "";
@@ -125,26 +343,153 @@ function uniq<T>(arr: T[]) {
   return Array.from(new Set(arr));
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const { user, meId } = await getMeId();
-    if (!user || !meId) {
-      return Response.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-    }
-
-    const admin = buildSupabaseAdmin();
-    if (!admin) {
-      return Response.json(
-        { ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." },
-        { status: 500 }
-      );
-    }
-
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     const action = String(body?.action || "").trim();
 
     if (action === "schema_sql") {
       return Response.json({ ok: true, sql: CHAT_SCHEMA_SQL }, { status: 200 });
+    }
+
+    const local = await localMe(req);
+    const isProd = process.env.NODE_ENV === "production";
+    const localMode = isLocalMode();
+
+    if (localMode) {
+      if (!local) return Response.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
+
+      if (action === "resolve_phone") {
+        const phone = normalizePhone(String(body?.phone || ""));
+        if (!phone) return jsonBadRequest("أدخل رقم الجوال.");
+        const profile = await localResolvePhone(phone);
+        if (!profile) return Response.json({ ok: false, code: "not_found", message: "الرقم غير موجود." }, { status: 404 });
+        return Response.json({ ok: true, profile }, { status: 200 });
+      }
+
+      if (action === "list_conversations") {
+        const conversations = await localListConversations(local.id);
+        return Response.json({ ok: true, conversations }, { status: 200 });
+      }
+
+      if (action === "get_messages") {
+        const conversationId = String(body?.conversation_id || "").trim();
+        if (!conversationId) return jsonBadRequest("conversation_id مطلوب.");
+        const r = await localGetMessages(local.id, conversationId);
+        if (!r.ok) return Response.json({ ok: false, code: r.code, message: r.message }, { status: r.code === "forbidden" ? 403 : 400 });
+        return Response.json({ ok: true, messages: r.messages }, { status: 200 });
+      }
+
+      if (action === "start_direct") {
+        const phone = normalizePhone(String(body?.phone || ""));
+        if (!phone) return jsonBadRequest("أدخل رقم الجوال.");
+        const r = await localStartDirect(local.id, phone);
+        if (!r.ok) {
+          const status = r.code === "not_found" ? 404 : 400;
+          return Response.json({ ok: false, code: r.code, message: r.message }, { status });
+        }
+        return Response.json({ ok: true, conversation_id: r.conversation_id }, { status: 200 });
+      }
+
+      if (action === "create_group") {
+        const title = String(body?.title || "").trim();
+        const phones = Array.isArray(body?.phones) ? (body?.phones as unknown[]).map((p) => normalizePhone(String(p || ""))).filter(Boolean) : [];
+        if (!title) return jsonBadRequest("اسم القروب مطلوب.");
+        const r = await localCreateGroup(local.id, title, uniq(phones));
+        if (!r.ok) return Response.json({ ok: false, code: r.code, message: r.message }, { status: 400 });
+        return Response.json({ ok: true, conversation_id: r.conversation_id }, { status: 200 });
+      }
+
+      if (action === "send_message") {
+        const conversationId = String(body?.conversation_id || "").trim();
+        const text = String(body?.text || "").trim();
+        if (!conversationId) return jsonBadRequest("conversation_id مطلوب.");
+        if (!text) return jsonBadRequest("اكتب رسالة.");
+        const r = await localSendMessage(local.id, conversationId, text);
+        if (!r.ok) return Response.json({ ok: false, code: r.code, message: r.message }, { status: 403 });
+        return Response.json({ ok: true, message: r.message }, { status: 200 });
+      }
+
+      return jsonBadRequest("إجراء غير معروف.", "unknown_action");
+    }
+
+    let user: unknown = null;
+    let meId = "";
+    try {
+      const r = await getMeId();
+      user = r.user;
+      meId = r.meId;
+    } catch (e: unknown) {
+      if (!isProd && local && (isFetchDownError(e) || isMissingEnvError(e))) {
+        if (action === "resolve_phone") {
+          const phone = normalizePhone(String(body?.phone || ""));
+          if (!phone) return jsonBadRequest("أدخل رقم الجوال.");
+          const profile = await localResolvePhone(phone);
+          if (!profile) return Response.json({ ok: false, code: "not_found", message: "الرقم غير موجود." }, { status: 404 });
+          return Response.json({ ok: true, profile }, { status: 200 });
+        }
+
+        if (action === "list_conversations") {
+          const conversations = await localListConversations(local.id);
+          return Response.json({ ok: true, conversations }, { status: 200 });
+        }
+
+        if (action === "get_messages") {
+          const conversationId = String(body?.conversation_id || "").trim();
+          if (!conversationId) return jsonBadRequest("conversation_id مطلوب.");
+          const r2 = await localGetMessages(local.id, conversationId);
+          if (!r2.ok) return Response.json({ ok: false, code: r2.code, message: r2.message }, { status: r2.code === "forbidden" ? 403 : 400 });
+          return Response.json({ ok: true, messages: r2.messages }, { status: 200 });
+        }
+
+        if (action === "start_direct") {
+          const phone = normalizePhone(String(body?.phone || ""));
+          if (!phone) return jsonBadRequest("أدخل رقم الجوال.");
+          const r2 = await localStartDirect(local.id, phone);
+          if (!r2.ok) {
+            const status = r2.code === "not_found" ? 404 : 400;
+            return Response.json({ ok: false, code: r2.code, message: r2.message }, { status });
+          }
+          return Response.json({ ok: true, conversation_id: r2.conversation_id }, { status: 200 });
+        }
+
+        if (action === "create_group") {
+          const title = String(body?.title || "").trim();
+          const phones = Array.isArray(body?.phones) ? (body?.phones as unknown[]).map((p) => normalizePhone(String(p || ""))).filter(Boolean) : [];
+          if (!title) return jsonBadRequest("اسم القروب مطلوب.");
+          const r2 = await localCreateGroup(local.id, title, uniq(phones));
+          if (!r2.ok) return Response.json({ ok: false, code: r2.code, message: r2.message }, { status: 400 });
+          return Response.json({ ok: true, conversation_id: r2.conversation_id }, { status: 200 });
+        }
+
+        if (action === "send_message") {
+          const conversationId = String(body?.conversation_id || "").trim();
+          const text = String(body?.text || "").trim();
+          if (!conversationId) return jsonBadRequest("conversation_id مطلوب.");
+          if (!text) return jsonBadRequest("اكتب رسالة.");
+          const r2 = await localSendMessage(local.id, conversationId, text);
+          if (!r2.ok) return Response.json({ ok: false, code: r2.code, message: r2.message }, { status: 403 });
+          return Response.json({ ok: true, message: r2.message }, { status: 200 });
+        }
+
+        return jsonBadRequest("إجراء غير معروف.", "unknown_action");
+      }
+      throw e;
+    }
+
+    if (!user || !meId) {
+      if (!isProd && local) {
+        return Response.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
+      }
+      return Response.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
+    }
+
+    const admin = buildSupabaseAdmin();
+    if (!admin) {
+      if (!isProd && local) {
+        return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
+      }
+      return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
     }
 
     if (action === "resolve_phone") {

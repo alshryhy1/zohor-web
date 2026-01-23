@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node -e \"try{require('fs').rmSync('.next/dev/lock',{force:true})}catch(e){}\"&& set ZOHOR_LOCAL_MODE=1&& set NEXT_PUBLIC_ZOHOR_LOCAL_MODE=1&& set NODE_OPTIONS=--max-old-space-size=4096&& next dev --webpack --port 3002",
+    "build": "next build --webpack",
+    "start": "next start -p 3002",
     "lint": "eslint"
   },
   "dependencies": {

@@ -19,6 +19,11 @@ function hasLocalStorage() {
   }
 }
 
+function isLocalModeEnabled() {
+  const v = String(process.env.NEXT_PUBLIC_ZOHOR_LOCAL_MODE || "").trim();
+  return v === "1" || v.toLowerCase() === "true";
+}
+
 function normalizeMomentUploadError(e: unknown) {
   const raw =
     e instanceof Error
@@ -44,6 +49,7 @@ function normalizeMomentUploadError(e: unknown) {
 }
 
 function buildSupabaseClient() {
+  if (isLocalModeEnabled()) return null;
   const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
   const key = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
   if (!url || !key) return null;
@@ -93,6 +99,109 @@ function saveState(id: string, s: Stored) {
   localStorage.setItem(`moment:${id}`, JSON.stringify(s));
 }
 
+function loadLocalMoments(): Moment[] {
+  if (!hasLocalStorage()) return [];
+  try {
+    const raw = localStorage.getItem("moments:local") || "";
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!Array.isArray(parsed)) return [];
+    const out: Moment[] = [];
+    for (const item of parsed) {
+      const obj = item && typeof item === "object" ? (item as Record<string, unknown>) : null;
+      const id = String(obj?.id || "").trim();
+      const mediaUrl = String(obj?.mediaUrl || "").trim();
+      if (!id || !mediaUrl) continue;
+      out.push({
+        id,
+        mediaUrl,
+        desc: typeof obj?.desc === "string" ? String(obj.desc) : "",
+        username: typeof obj?.username === "string" ? String(obj.username) : "",
+        userId: typeof obj?.userId === "string" ? String(obj.userId) : "",
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalMoments(list: Moment[]) {
+  if (!hasLocalStorage()) return;
+  try {
+    localStorage.setItem("moments:local", JSON.stringify(list.slice(0, 200)));
+  } catch {}
+}
+
+function mergeUniqueMoments(primary: Moment[], secondary: Moment[]) {
+  const out: Moment[] = [];
+  const seen = new Set<string>();
+  for (const m of primary) {
+    const id = String(m?.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(m);
+  }
+  for (const m of secondary) {
+    const id = String(m?.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(m);
+  }
+  return out;
+}
+
+function getViewsKey(id: string) {
+  return `momentViews:${id}`;
+}
+
+function getViewsCount(id: string) {
+  if (!hasLocalStorage()) return 0;
+  try {
+    const n = Number(localStorage.getItem(getViewsKey(id)) || "0");
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpViewsOncePerSession(id: string) {
+  if (!hasLocalStorage()) return 0;
+  const sid = String(id || "").trim();
+  if (!sid) return 0;
+  try {
+    const ss = typeof window !== "undefined" ? window.sessionStorage : null;
+    const flagKey = `momentViewed:${sid}`;
+    if (ss) {
+      const already = ss.getItem(flagKey) === "1";
+      if (already) return getViewsCount(sid);
+      ss.setItem(flagKey, "1");
+    }
+    const key = getViewsKey(sid);
+    const next = getViewsCount(sid) + 1;
+    localStorage.setItem(key, String(next));
+    return next;
+  } catch {
+    return getViewsCount(sid);
+  }
+}
+
+function safeLocalId() {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `local-${crypto.randomUUID()}`;
+  } catch {}
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function fileToDataUrl(file: File) {
+  const f = file;
+  return await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error("read_failed"));
+    r.onload = () => resolve(String(r.result || ""));
+    r.readAsDataURL(f);
+  });
+}
+
 function LikeIcon({ filled }: { filled: boolean }) {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -101,6 +210,25 @@ function LikeIcon({ filled }: { filled: boolean }) {
         stroke={filled ? "#EF4444" : "rgba(255,255,255,0.9)"}
         strokeWidth="1.8"
         fill={filled ? "#EF4444" : "transparent"}
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.86 }}>
+      <path
+        d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"
+        stroke="#FFFFFF"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"
+        stroke="#FFFFFF"
+        strokeWidth="1.8"
         strokeLinejoin="round"
       />
     </svg>
@@ -375,8 +503,14 @@ export default function MomentsClient({
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
-    setMoments(initialMoments || []);
-  }, [initialMoments]);
+    const base = initialMoments || [];
+    if (!hydrated) {
+      setMoments(base);
+      return;
+    }
+    const local = loadLocalMoments();
+    setMoments(mergeUniqueMoments(local, base));
+  }, [initialMoments, hydrated]);
 
   React.useEffect(() => {
     setFollowingIds(new Set(initialFollowingIds || []));
@@ -391,6 +525,15 @@ export default function MomentsClient({
   React.useEffect(() => {
     setHydrated(true);
   }, []);
+
+  React.useEffect(() => {
+    if (!hydrated) return;
+    if (!moments.length) return;
+    const id = String(moments[activeIndex]?.id || "").trim();
+    if (!id) return;
+    bumpViewsOncePerSession(id);
+    setStateTick((v) => v + 1);
+  }, [activeIndex, hydrated, moments]);
 
   React.useEffect(() => {
     const root = scrollerRef.current;
@@ -417,6 +560,13 @@ export default function MomentsClient({
     });
 
     return () => obs.disconnect();
+  }, [moments.length]);
+
+  React.useEffect(() => {
+    itemRefs.current = itemRefs.current.slice(0, moments.length);
+    videoRefs.current = videoRefs.current.slice(0, moments.length);
+    if (!moments.length) return;
+    setActiveIndex((idx) => Math.max(0, Math.min(idx, moments.length - 1)));
   }, [moments.length]);
 
   React.useEffect(() => {
@@ -627,11 +777,46 @@ export default function MomentsClient({
     const id = String(m.id || "").trim();
     const meId = String(me?.id || "").trim();
     if (!id || !meId) return;
+    const currentActive = activeIndex;
     if (typeof window !== "undefined") {
       const ok = window.confirm("حذف هذه اللحظة نهائيًا؟");
       if (!ok) return;
     }
     try {
+      if (!supabase || id.startsWith("local-")) {
+        setMoments((prev) => {
+          const deletedIndex = prev.findIndex((x) => x.id === id);
+          const next = prev.filter((x) => x.id !== id);
+          if (!next.length) {
+            window.requestAnimationFrame(() => setActiveIndex(0));
+            return next;
+          }
+          const baseActive = Math.max(0, Math.min(currentActive, prev.length - 1));
+          let nextActive = baseActive;
+          if (deletedIndex >= 0) {
+            if (deletedIndex < baseActive) nextActive = Math.max(0, baseActive - 1);
+            else if (deletedIndex === baseActive) nextActive = Math.min(baseActive, next.length - 1);
+            else nextActive = Math.min(baseActive, next.length - 1);
+          } else {
+            nextActive = Math.min(baseActive, next.length - 1);
+          }
+          window.requestAnimationFrame(() => {
+            setActiveIndex(nextActive);
+            const el = itemRefs.current[nextActive];
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+          return next;
+        });
+        try {
+          const locals = loadLocalMoments().filter((x) => x.id !== id);
+          saveLocalMoments(locals);
+        } catch {}
+        try {
+          if (hasLocalStorage()) localStorage.removeItem(`moment:${id}`);
+        } catch {}
+        setToast("تم الحذف");
+        return;
+      }
       const res = await fetch("/moments/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -640,7 +825,29 @@ export default function MomentsClient({
       });
       const json = (await res.json()) as { ok?: unknown; message?: unknown };
       if (!res.ok || !json?.ok) throw new Error(String(json?.message || "تعذر الحذف"));
-      setMoments((prev) => prev.filter((x) => x.id !== id));
+      setMoments((prev) => {
+        const deletedIndex = prev.findIndex((x) => x.id === id);
+        const next = prev.filter((x) => x.id !== id);
+        if (!next.length) {
+          window.requestAnimationFrame(() => setActiveIndex(0));
+          return next;
+        }
+        const baseActive = Math.max(0, Math.min(currentActive, prev.length - 1));
+        let nextActive = baseActive;
+        if (deletedIndex >= 0) {
+          if (deletedIndex < baseActive) nextActive = Math.max(0, baseActive - 1);
+          else if (deletedIndex === baseActive) nextActive = Math.min(baseActive, next.length - 1);
+          else nextActive = Math.min(baseActive, next.length - 1);
+        } else {
+          nextActive = Math.min(baseActive, next.length - 1);
+        }
+        window.requestAnimationFrame(() => {
+          setActiveIndex(nextActive);
+          const el = itemRefs.current[nextActive];
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+        return next;
+      });
       try {
         if (hasLocalStorage()) localStorage.removeItem(`moment:${id}`);
       } catch {}
@@ -696,11 +903,35 @@ export default function MomentsClient({
   }
 
   async function upload() {
-    if (!supabase || !uploadFile || uploadBusy) return;
+    if (!uploadFile || uploadBusy) return;
     setUploadBusy(true);
     setUploadMsg("");
     try {
       const desc = (uploadDesc || "").trim();
+      const meId = String(me?.id || "").trim();
+      if (!meId) {
+        setUploadMsg("يلزم تسجيل الدخول لرفع لحظة.");
+        return;
+      }
+      if (!supabase) {
+        const dataUrl = await fileToDataUrl(uploadFile);
+        const id = safeLocalId();
+        const next: Moment = {
+          id,
+          mediaUrl: dataUrl,
+          desc,
+          username: String(me?.username || "").trim(),
+          userId: meId,
+        };
+        const local = mergeUniqueMoments([next], loadLocalMoments());
+        saveLocalMoments(local);
+        setMoments((prev) => mergeUniqueMoments([next], prev));
+        setUploadFile(null);
+        setUploadDesc("");
+        setUploadOpen(false);
+        setToast("تم النشر");
+        return;
+      }
       const form = new FormData();
       form.set("file", uploadFile);
       const upRes = await fetch("/moments/upload", { method: "POST", body: form, credentials: "include" });
@@ -888,6 +1119,13 @@ export default function MomentsClient({
                 </ActionButton>
 
                 <div style={{ display: "grid", placeItems: "center" }}>
+                  <div style={{ height: 44, width: 44, display: "grid", placeItems: "center", opacity: 0.85 }}>
+                    <EyeIcon />
+                  </div>
+                  <Count value={getViewsCount(m.id)} />
+                </div>
+
+                <div style={{ display: "grid", placeItems: "center" }}>
                   <ActionButton
                     label="لايك"
                     onClick={() => {
@@ -991,6 +1229,7 @@ export default function MomentsClient({
           type="button"
           onClick={() => {
             setUploadMsg("");
+            if (!me?.id) setUploadMsg("يلزم تسجيل الدخول لرفع لحظة.");
             setUploadOpen(true);
           }}
           style={{
@@ -1324,6 +1563,7 @@ export default function MomentsClient({
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   placeholder="اكتب تعليق..."
+                  disabled={!me?.id}
                   style={{
                     flex: 1,
                     height: 40,
@@ -1334,11 +1574,16 @@ export default function MomentsClient({
                     padding: "0 12px",
                     outline: "none",
                     fontWeight: 900,
+                    opacity: !me?.id ? 0.7 : 1,
                   }}
                 />
                 <button
                   type="button"
                   onClick={() => {
+                    if (!me?.id) {
+                      setToast("يلزم تسجيل الدخول للتعليق.");
+                      return;
+                    }
                     const t = commentText.trim();
                     if (!t) return;
                     const curr = getStored(commentFor.id);
@@ -1350,6 +1595,7 @@ export default function MomentsClient({
                     setToast("تم");
                     setStateTick((v) => v + 1);
                   }}
+                  disabled={!me?.id}
                   style={{
                     width: 86,
                     height: 40,
@@ -1358,7 +1604,8 @@ export default function MomentsClient({
                     background: gold,
                     color: "#0B0B0D",
                     fontWeight: 900,
-                    cursor: "pointer",
+                    cursor: !me?.id ? "not-allowed" : "pointer",
+                    opacity: !me?.id ? 0.6 : 1,
                   }}
                   aria-label="إرسال"
                 >
@@ -1429,7 +1676,7 @@ export default function MomentsClient({
               <button
                 type="button"
                 onClick={upload}
-                disabled={!uploadFile || uploadBusy || !supabase}
+                disabled={!uploadFile || uploadBusy || (!supabase && !isLocalModeEnabled()) || !me?.id}
                 style={{
                   height: 40,
                   padding: "0 14px",
@@ -1440,8 +1687,8 @@ export default function MomentsClient({
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 8,
-                  cursor: !uploadFile || uploadBusy || !supabase ? "not-allowed" : "pointer",
-                  opacity: !uploadFile || uploadBusy || !supabase ? 0.6 : 1,
+                  cursor: !uploadFile || uploadBusy || (!supabase && !isLocalModeEnabled()) || !me?.id ? "not-allowed" : "pointer",
+                  opacity: !uploadFile || uploadBusy || (!supabase && !isLocalModeEnabled()) || !me?.id ? 0.6 : 1,
                   fontWeight: 900,
                   color: "#0B0B0D",
                 }}
@@ -1453,6 +1700,27 @@ export default function MomentsClient({
             </div>
 
             <div style={{ padding: 12 }}>
+              {!me?.id ? (
+                <div
+                  style={{
+                    borderRadius: 16,
+                    border: `1px solid ${border}`,
+                    background: "rgba(255,255,255,0.04)",
+                    padding: 12,
+                    fontWeight: 900,
+                    marginBottom: 12,
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <div>يلزم تسجيل الدخول لرفع لحظة.</div>
+                  <div style={{ marginTop: 6 }}>
+                    <Link href="/settings" style={{ color: gold, textDecoration: "none", fontWeight: 1000 }}>
+                      للتسجيل اضغط هنا
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
+
               <div
                 style={{
                   borderRadius: 16,
@@ -1485,11 +1753,11 @@ export default function MomentsClient({
               </div>
 
               <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-                <IconButton label="كاميرا" onClick={() => cameraRef.current?.click()} disabled={uploadBusy}>
+                <IconButton label="كاميرا" onClick={() => cameraRef.current?.click()} disabled={uploadBusy || !me?.id}>
                   <CameraIcon />
                   <span>كاميرا</span>
                 </IconButton>
-                <IconButton label="استديو" onClick={() => studioRef.current?.click()} disabled={uploadBusy}>
+                <IconButton label="استديو" onClick={() => studioRef.current?.click()} disabled={uploadBusy || !me?.id}>
                   <CameraIcon />
                   <span>استديو</span>
                 </IconButton>

@@ -1,6 +1,10 @@
+import { Suspense } from "react";
 import LiveClient from "./live-client";
 
 export default function LivePage() {
-  return <LiveClient />;
+  return (
+    <Suspense fallback={null}>
+      <LiveClient />
+    </Suspense>
+  );
 }
-

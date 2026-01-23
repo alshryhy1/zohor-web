@@ -1,7 +1,30 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { createBrowserClient } from "@supabase/ssr";
+
+function buildSupabaseBrowser() {
+  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  const key = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+  if (!url || !key) return null;
+  return createBrowserClient(url, key);
+}
+
+function asObj(v: unknown) {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+async function apiChat(body: Record<string, unknown>) {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => null)) as unknown;
+  return { res, json };
+}
 
 function Icon({
   name,
@@ -125,9 +148,135 @@ function Icon({
 export default function BottomNav() {
   const router = useRouter();
   const pathname = usePathname() || "/";
+  const supabase = React.useMemo(() => buildSupabaseBrowser(), []);
+
+  const [meId, setMeId] = React.useState("");
+  const [notifPermission, setNotifPermission] = React.useState<"default" | "granted" | "denied">("default");
+  const channelsRef = React.useRef(new Map<string, ReturnType<NonNullable<typeof supabase>["channel"]>>());
+
+  const refreshNotifPermission = React.useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!("Notification" in window)) {
+      setNotifPermission("default");
+      return;
+    }
+    setNotifPermission(Notification.permission);
+  }, []);
+
+  const refreshMe = React.useCallback(async () => {
+    if (!supabase) {
+      setMeId("");
+      return;
+    }
+    const { data } = await supabase.auth.getUser();
+    const id = typeof data?.user?.id === "string" ? data.user.id : "";
+    setMeId(id);
+  }, [supabase]);
+
+  const refreshConversationSubscriptions = React.useCallback(async () => {
+    if (notifPermission !== "granted") return;
+    if (!supabase || !meId) return;
+    const { res, json } = await apiChat({ action: "list_conversations" });
+    const obj = asObj(json);
+    if (!res.ok || !obj || obj["ok"] !== true) return;
+    const list = Array.isArray(obj["conversations"]) ? (obj["conversations"] as unknown[]) : [];
+    const ids = list
+      .map((c) => String(asObj(c)?.["id"] || "").trim())
+      .filter(Boolean);
+
+    const next = new Set(ids);
+    for (const [id, channel] of channelsRef.current) {
+      if (!next.has(id)) {
+        supabase.removeChannel(channel);
+        channelsRef.current.delete(id);
+      }
+    }
+
+    for (const id of next) {
+      if (channelsRef.current.has(id)) continue;
+      const channel = supabase
+        .channel(`notif:messages:${id}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "messages", filter: `conversation_id=eq.${id}` },
+          (payload) => {
+            const row = (payload as unknown as { new?: unknown } | null)?.new;
+            const m = asObj(row);
+            if (!m) return;
+            const senderId = String(m["sender_id"] || "");
+            if (senderId && senderId === meId) return;
+
+            if (typeof window === "undefined") return;
+            const hidden = !!document.hidden;
+            const onChat = window.location?.pathname === "/chat";
+            if (!hidden && onChat) return;
+
+            if (!("Notification" in window)) return;
+            if (Notification.permission !== "granted") return;
+
+            const body = String(m["body"] || "").trim();
+            const title = "رسالة جديدة";
+            const n = new Notification(title, {
+              body: body || "لديك رسالة جديدة",
+              tag: `conv:${id}`,
+            });
+            n.onclick = () => {
+              try {
+                window.focus();
+              } catch {}
+              window.location.href = "/chat";
+            };
+          }
+        )
+        .subscribe();
+
+      channelsRef.current.set(id, channel);
+    }
+  }, [meId, notifPermission, supabase]);
+
   const firstLang =
     (typeof navigator !== "undefined" && (navigator.languages?.[0] || navigator.language)) || "";
   const liveLabel = firstLang.toLowerCase().startsWith("en") ? "LIVE" : "مباشر";
+
+  React.useEffect(() => {
+    refreshNotifPermission();
+    window.addEventListener("focus", refreshNotifPermission);
+    document.addEventListener("visibilitychange", refreshNotifPermission);
+    return () => {
+      window.removeEventListener("focus", refreshNotifPermission);
+      document.removeEventListener("visibilitychange", refreshNotifPermission);
+    };
+  }, [refreshNotifPermission]);
+
+  React.useEffect(() => {
+    refreshMe();
+  }, [refreshMe]);
+
+  React.useEffect(() => {
+    if (!supabase || !meId) return;
+    if (notifPermission !== "granted") return;
+    refreshConversationSubscriptions();
+    const t = window.setInterval(() => {
+      refreshConversationSubscriptions();
+    }, 30_000);
+    return () => window.clearInterval(t);
+  }, [meId, notifPermission, refreshConversationSubscriptions, supabase]);
+
+  React.useEffect(() => {
+    if (!supabase) return;
+    if (notifPermission === "granted") return;
+    for (const [, channel] of channelsRef.current) supabase.removeChannel(channel);
+    channelsRef.current.clear();
+  }, [notifPermission, supabase]);
+
+  React.useEffect(() => {
+    if (!supabase) return;
+    const channels = channelsRef.current;
+    return () => {
+      for (const [, channel] of channels) supabase.removeChannel(channel);
+      channels.clear();
+    };
+  }, [supabase]);
 
   if (pathname !== "/feed") return null;
 

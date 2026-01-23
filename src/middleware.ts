@@ -6,6 +6,11 @@ function isHttpUrl(v: string) {
   return s.startsWith("https://") || s.startsWith("http://");
 }
 
+function isLocalMode() {
+  const v = String(process.env.ZOHOR_LOCAL_MODE || "").trim();
+  return v === "1" || v.toLowerCase() === "true";
+}
+
 export async function middleware(req: NextRequest) {
   if (req.nextUrl.pathname === "/") {
     return NextResponse.redirect(new URL("/feed", req.url));
@@ -13,16 +18,45 @@ export async function middleware(req: NextRequest) {
 
   const res = NextResponse.next();
 
+  const p = req.nextUrl.pathname;
+  if (p === "/live" || p.startsWith("/live/")) {
+    const csp =
+      "default-src 'self'; " +
+      "base-uri 'self'; " +
+      "object-src 'none'; " +
+      "frame-ancestors 'self'; " +
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline' blob: data: https:; " +
+      "worker-src 'self' blob:; " +
+      "style-src 'self' 'unsafe-inline' https:; " +
+      "img-src 'self' data: blob: https:; " +
+      "font-src 'self' data: https:; " +
+      "media-src 'self' blob: https:; " +
+      "connect-src 'self' https: wss: blob:; ";
+    res.headers.set("Content-Security-Policy", csp);
+  }
+
+  if (isLocalMode()) return res;
+  if (process.env.NODE_ENV !== "production") return res;
+
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
   const anon = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
 
   // إذا الإعدادات ناقصة/خاطئة: لا نكسر الموقع — فقط نترك الطلب يكمل.
   if (!url || !anon || !isHttpUrl(url)) return res;
 
+  if (p === "/live" || p.startsWith("/live/")) return res;
+
+  const reqCookies = req.cookies.getAll();
+  const hasSupabaseCookie = reqCookies.some((c) => c.name.startsWith("sb-"));
+  if (!hasSupabaseCookie) return res;
+
+  const abort = new AbortController();
+  const timeoutId = setTimeout(() => abort.abort(), 800);
+
   const supabase = createServerClient(url, anon, {
     cookies: {
       getAll() {
-        return req.cookies.getAll();
+        return reqCookies;
       },
       setAll(cookiesToSet) {
         cookiesToSet.forEach(({ name, value, options }) => {
@@ -30,10 +64,19 @@ export async function middleware(req: NextRequest) {
         });
       },
     },
+    global: {
+      fetch(input, init) {
+        return fetch(input, { ...init, signal: abort.signal });
+      },
+    },
   });
 
-  // هذا السطر مهم جدًا: يحدّث session cookies تلقائيًا لو كانت منتهية/تحتاج refresh
-  await supabase.auth.getUser();
+  try {
+    await supabase.auth.getUser();
+  } catch {}
+  finally {
+    clearTimeout(timeoutId);
+  }
 
   return res;
 }

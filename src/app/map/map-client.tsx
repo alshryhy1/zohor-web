@@ -26,18 +26,33 @@ function hasLocalStorage() {
   }
 }
 
-function safeUuid() {
-  try {
-    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  } catch {}
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+function normalizeSupabaseUrl(raw: string) {
+  let s = String(raw || "").trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
+  if (!s) return "";
+  if (s.startsWith("https://") || s.startsWith("http://")) return s;
+  return `https://${s}`;
+}
+
+function normalizeKey(raw: string) {
+  let s = String(raw || "").trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
+  return s;
+}
+
+function isLocalModeEnabled() {
+  const v = String(process.env.NEXT_PUBLIC_ZOHOR_LOCAL_MODE || "").trim();
+  return v === "1" || v.toLowerCase() === "true";
 }
 
 function buildSupabaseClient() {
-  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
-  const key = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+  if (isLocalModeEnabled()) return null;
+  const url = normalizeSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
+  const key = normalizeKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
   if (!url || !key) return null;
-  return createBrowserClient(url, key);
+  return createBrowserClient(url, key, {
+    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+  });
 }
 
 function isVideoUrl(url: string) {
@@ -70,6 +85,34 @@ function loadState(id: string): Stored {
 function saveState(id: string, s: Stored) {
   if (!hasLocalStorage()) return;
   localStorage.setItem(`mapPost:${id}`, JSON.stringify(s));
+}
+
+type StoredViews = { count: number; lastAt: number };
+
+function loadViews(id: string): StoredViews {
+  if (!hasLocalStorage()) return { count: 0, lastAt: 0 };
+  try {
+    const raw = localStorage.getItem(`mapPostViews:${id}`) || "";
+    const parsed = raw ? (JSON.parse(raw) as StoredViews) : null;
+    const count = Number.isFinite(parsed?.count) ? Number(parsed?.count) : 0;
+    const lastAt = Number.isFinite(parsed?.lastAt) ? Number(parsed?.lastAt) : 0;
+    return { count: Math.max(0, count), lastAt: Math.max(0, lastAt) };
+  } catch {
+    return { count: 0, lastAt: 0 };
+  }
+}
+
+function saveViews(id: string, next: StoredViews) {
+  if (!hasLocalStorage()) return;
+  localStorage.setItem(`mapPostViews:${id}`, JSON.stringify(next));
+}
+
+function bumpView(id: string) {
+  if (!id) return;
+  const now = Date.now();
+  const curr = loadViews(id);
+  if (now - curr.lastAt < 10_000) return;
+  saveViews(id, { count: curr.count + 1, lastAt: now });
 }
 
 function formatTimeLeft(expiresAtIso: string) {
@@ -119,6 +162,16 @@ function normalizePublishError(e: unknown) {
     return "تعذر رفع الملف بسبب صلاحيات التخزين. تأكد من سياسات bucket moments-media للمستخدمين المسجلين.";
 
   return m || "تعذر النشر";
+}
+
+function asObj(v: unknown) {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function emailToUsername(email: string) {
+  const e = String(email || "").trim();
+  if (!e.includes("@")) return e;
+  return String(e.split("@")[0] || "").trim();
 }
 
 function IconButton({
@@ -178,6 +231,25 @@ function CommentIcon() {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
       <path
         d="M20 14a4 4 0 0 1-4 4H8l-4 3V6a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v8Z"
+        stroke="#FFFFFF"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+      <path
+        d="M2.5 12s3.5-7 9.5-7 9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7Z"
+        stroke="#FFFFFF"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
         stroke="#FFFFFF"
         strokeWidth="1.8"
         strokeLinejoin="round"
@@ -248,6 +320,12 @@ export default function MapClient({
 }) {
   const supabase = React.useMemo(() => buildSupabaseClient(), []);
 
+  const [meUserId, setMeUserId] = React.useState(() => String(myUserId || "").trim());
+  const [meUsername, setMeUsername] = React.useState(() => {
+    const u = String(myUsername || "").trim();
+    return u || (String(myUserId || "").trim() ? "مستخدم" : "زائر");
+  });
+
   const [posts, setPosts] = React.useState<MapPost[]>(() => initialPosts || []);
   const postsRef = React.useRef<MapPost[]>(initialPosts || []);
   const [toast, setToast] = React.useState("");
@@ -272,6 +350,40 @@ export default function MapClient({
 
   const cameraRef = React.useRef<HTMLInputElement | null>(null);
   const studioRef = React.useRef<HTMLInputElement | null>(null);
+
+  React.useEffect(() => {
+    const id = String(myUserId || "").trim();
+    const username = String(myUsername || "").trim();
+    setMeUserId(id);
+    setMeUsername(username || (id ? "مستخدم" : "زائر"));
+  }, [myUserId, myUsername]);
+
+  const refreshMe = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "me" }),
+      });
+      const json = (await res.json().catch(() => null)) as unknown;
+      const obj = asObj(json);
+      if (!res.ok || !obj || obj["ok"] !== true) return;
+      const u = asObj(obj["user"]);
+      const id = String(u?.["id"] || "").trim();
+      if (!id) return;
+      const email = String(u?.["email"] || "").trim();
+      setMeUserId(id);
+      setMeUsername((prev) => {
+        const p = String(prev || "").trim();
+        if (p && p !== "زائر") return p;
+        return emailToUsername(email) || "مستخدم";
+      });
+    } catch {}
+  }, []);
+
+  React.useEffect(() => {
+    void refreshMe();
+  }, [refreshMe]);
 
   React.useEffect(() => {
     setPosts(initialPosts || []);
@@ -301,6 +413,7 @@ export default function MapClient({
   const selectedLocal = selectedId
     ? (loadState(selectedId) satisfies Stored)
     : ({ liked: false, likes: 0, comments: [] } satisfies Stored);
+  const selectedViews = selectedId ? loadViews(selectedId) : { count: 0, lastAt: 0 };
 
   const selectedView = remoteOk
     ? ({ liked: remoteLiked, likes: remoteLikes, comments: remoteComments } satisfies Stored)
@@ -320,12 +433,12 @@ export default function MapClient({
       if (cErr) throw cErr;
 
       let liked = false;
-      if (myUserId) {
+      if (meUserId) {
         const { data: me, error: meErr } = await supabase
           .from("map_post_likes")
           .select("user_id")
           .eq("post_id", postId)
-          .eq("user_id", myUserId)
+          .eq("user_id", meUserId)
           .limit(1);
         if (meErr) throw meErr;
         liked = Array.isArray(me) && me.length > 0;
@@ -370,7 +483,13 @@ export default function MapClient({
     }
     refreshRemote(selected.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, supabase, myUserId]);
+  }, [selected?.id, supabase, meUserId]);
+
+  React.useEffect(() => {
+    if (!selectedId) return;
+    bumpView(selectedId);
+    setStateTick((v) => v + 1);
+  }, [selectedId]);
 
   React.useEffect(() => {
     const t = window.setInterval(() => {
@@ -512,13 +631,8 @@ export default function MapClient({
   }
 
   async function createPostAtUserLocation() {
-    if (!supabase) {
-      setToast("إعدادات Supabase ناقصة");
-      return;
-    }
-
-    if (!myUserId) {
-      setUploadMsg("يلزم تسجيل الدخول أولًا.");
+    if (!meUserId) {
+      setUploadMsg("يلزم تسجيل الدخول لرفع مقطع/صورة.");
       return;
     }
 
@@ -542,54 +656,40 @@ export default function MapClient({
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
 
-      const ext = (uploadFile.name.split(".").pop() || "").toLowerCase();
-      const path = `public/map/${Date.now()}-${safeUuid()}${ext ? `.${ext}` : ""}`;
-      const bucket = "moments-media";
-      const { error: upErr } = await supabase.storage.from(bucket).upload(path, uploadFile, {
-        contentType: uploadFile.type || undefined,
-        upsert: false,
-      });
-      if (upErr) throw upErr;
-
-      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-      const mediaUrl = String(data?.publicUrl || "").trim();
-      if (!mediaUrl) throw new Error("تعذر الحصول على رابط الملف");
-
       const hours = Math.max(1, Math.min(24, Math.floor(durationHours || 24)));
-      const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+      const form = new FormData();
+      form.set("file", uploadFile);
+      form.set("lat", String(lat));
+      form.set("lng", String(lng));
+      form.set("hours", String(hours));
 
-      const { data: inserted, error: insErr } = await supabase
-        .from("map_posts")
-        .insert({
-          user_id: myUserId || null,
-          username: myUsername || null,
-          media_url: mediaUrl,
-          lat,
-          lng,
-          expires_at: expiresAt,
-        })
-        .select("id,media_url,lat,lng,expires_at,username,created_at")
-        .single();
+      const res = await fetch("/map/create", { method: "POST", body: form, credentials: "include" });
+      const json = (await res.json().catch(() => null)) as
+        | {
+            ok?: unknown;
+            message?: unknown;
+            post?: {
+              id?: unknown;
+              mediaUrl?: unknown;
+              lat?: unknown;
+              lng?: unknown;
+              expiresAt?: unknown;
+              username?: unknown;
+              createdAt?: unknown;
+            };
+          }
+        | null;
 
-      if (insErr) throw insErr;
+      if (!res.ok || !json?.ok) throw new Error(String(json?.message || "تعذر النشر"));
 
-      const row = inserted as unknown as {
-        id: unknown;
-        media_url: unknown;
-        lat: unknown;
-        lng: unknown;
-        expires_at: unknown;
-        username: unknown;
-        created_at: unknown;
-      };
-
-      const id = String(row?.id || "").trim();
-      const media = String(row?.media_url || "").trim();
-      const rLat = Number(row?.lat);
-      const rLng = Number(row?.lng);
-      const exp = String(row?.expires_at || "").trim();
-      const u = String(row?.username || "").trim();
-      const createdAt = String(row?.created_at || "").trim();
+      const post = json?.post || {};
+      const id = String(post?.id || "").trim();
+      const media = String(post?.mediaUrl || "").trim();
+      const rLat = Number(post?.lat);
+      const rLng = Number(post?.lng);
+      const exp = String(post?.expiresAt || "").trim();
+      const u = String(post?.username || "").trim();
+      const createdAt = String(post?.createdAt || "").trim();
       if (!id || !media || !Number.isFinite(rLat) || !Number.isFinite(rLng) || !exp) throw new Error("تعذر إنشاء النقطة");
 
       const p: MapPost = { id, mediaUrl: media, lat: rLat, lng: rLng, expiresAt: exp, username: u, createdAt };
@@ -705,6 +805,7 @@ export default function MapClient({
           type="button"
           onClick={() => {
             setUploadMsg("");
+            if (!meUserId) setUploadMsg("يلزم تسجيل الدخول لرفع مقطع/صورة.");
             setUploadOpen(true);
           }}
           style={{
@@ -828,6 +929,27 @@ export default function MapClient({
             </div>
 
             <div style={{ padding: 12 }}>
+              {!meUserId ? (
+                <div
+                  style={{
+                    borderRadius: 16,
+                    border: `1px solid ${border}`,
+                    background: "rgba(255,255,255,0.04)",
+                    padding: 12,
+                    fontWeight: 900,
+                    marginBottom: 12,
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <div>يلزم تسجيل الدخول لرفع مقطع/صورة.</div>
+                  <div style={{ marginTop: 6 }}>
+                    <Link href="/settings" style={{ color: gold, textDecoration: "none", fontWeight: 1000 }}>
+                      للتسجيل اضغط هنا
+                    </Link>
+                  </div>
+                </div>
+              ) : null}
+
               <div
                 style={{
                   borderRadius: 16,
@@ -859,7 +981,7 @@ export default function MapClient({
                 <button
                   type="button"
                   onClick={() => {
-                    if (remoteOk && supabase && myUserId) {
+                    if (remoteOk && supabase && meUserId) {
                       (async () => {
                         setRemoteBusy(true);
                         try {
@@ -868,12 +990,12 @@ export default function MapClient({
                               .from("map_post_likes")
                               .delete()
                               .eq("post_id", selected.id)
-                              .eq("user_id", myUserId);
+                              .eq("user_id", meUserId);
                             if (error) throw error;
                           } else {
                             const { error } = await supabase.from("map_post_likes").insert({
                               post_id: selected.id,
-                              user_id: myUserId,
+                              user_id: meUserId,
                             });
                             if (error) throw error;
                           }
@@ -920,6 +1042,26 @@ export default function MapClient({
                   <LikeIcon filled={selectedView.liked} />
                   <span>{selectedView.likes}</span>
                 </button>
+
+                <div
+                  style={{
+                    minWidth: 86,
+                    height: 44,
+                    borderRadius: 14,
+                    border: `1px solid ${border}`,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    padding: "0 12px",
+                    fontWeight: 900,
+                    opacity: 0.9,
+                  }}
+                  aria-label="عدد المشاهدات"
+                >
+                  <EyeIcon />
+                  <span>{selectedViews.count}</span>
+                </div>
 
                 <div
                   style={{
@@ -992,16 +1134,20 @@ export default function MapClient({
               <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                 <CommentComposer
                   onSubmit={(text) => {
+                    if (!meUserId) {
+                      setToast("يلزم تسجيل الدخول للتعليق.");
+                      return;
+                    }
                     const t = text.trim();
                     if (!t) return;
-                    if (remoteOk && supabase && myUserId) {
+                    if (remoteOk && supabase && meUserId) {
                       (async () => {
                         setRemoteBusy(true);
                         try {
                           const { error } = await supabase.from("map_post_comments").insert({
                             post_id: selected.id,
-                            user_id: myUserId,
-                            username: myUsername || null,
+                            user_id: meUserId,
+                            username: meUsername || null,
                             body: t,
                           });
                           if (error) throw error;
@@ -1012,7 +1158,7 @@ export default function MapClient({
                             ...curr,
                             comments: [
                               ...curr.comments,
-                              { user: myUsername || "مستخدم", text: t, at: new Date().toISOString() },
+                              { user: meUsername || "مستخدم", text: t, at: new Date().toISOString() },
                             ],
                           };
                           saveState(selected.id, next);
@@ -1030,12 +1176,13 @@ export default function MapClient({
                       ...curr,
                       comments: [
                         ...curr.comments,
-                        { user: myUsername || "مستخدم", text: t, at: new Date().toISOString() },
+                        { user: meUsername || "مستخدم", text: t, at: new Date().toISOString() },
                       ],
                     };
                     saveState(selected.id, next);
                     setStateTick((v) => v + 1);
                   }}
+                  disabled={!meUserId}
                 />
               </div>
             </div>
@@ -1102,7 +1249,7 @@ export default function MapClient({
               <button
                 type="button"
                 onClick={createPostAtUserLocation}
-                disabled={!uploadFile || uploadBusy || !supabase}
+                disabled={!uploadFile || uploadBusy || !meUserId}
                 style={{
                   height: 40,
                   padding: "0 14px",
@@ -1113,8 +1260,8 @@ export default function MapClient({
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 8,
-                  cursor: !uploadFile || uploadBusy || !supabase ? "not-allowed" : "pointer",
-                  opacity: !uploadFile || uploadBusy || !supabase ? 0.6 : 1,
+                  cursor: !uploadFile || uploadBusy || !meUserId ? "not-allowed" : "pointer",
+                  opacity: !uploadFile || uploadBusy || !meUserId ? 0.6 : 1,
                   fontWeight: 900,
                   color: "#0B0B0D",
                 }}
@@ -1158,11 +1305,19 @@ export default function MapClient({
               </div>
 
               <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-                <IconButton label="كاميرا" onClick={() => cameraRef.current?.click()} disabled={uploadBusy}>
+                <IconButton
+                  label="كاميرا"
+                  onClick={() => cameraRef.current?.click()}
+                  disabled={uploadBusy || !meUserId}
+                >
                   <CameraIcon />
                   <span>كاميرا</span>
                 </IconButton>
-                <IconButton label="استديو" onClick={() => studioRef.current?.click()} disabled={uploadBusy}>
+                <IconButton
+                  label="استديو"
+                  onClick={() => studioRef.current?.click()}
+                  disabled={uploadBusy || !meUserId}
+                >
                   <CameraIcon />
                   <span>استديو</span>
                 </IconButton>
@@ -1219,7 +1374,7 @@ export default function MapClient({
   );
 }
 
-function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
+function CommentComposer({ onSubmit, disabled }: { onSubmit: (text: string) => void; disabled?: boolean }) {
   const [text, setText] = React.useState("");
   const border = "rgba(255,255,255,0.10)";
   const gold = "#C9A24D";
@@ -1229,6 +1384,7 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="اكتب تعليق..."
+        disabled={disabled}
         style={{
           flex: 1,
           height: 44,
@@ -1239,16 +1395,19 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
           padding: "0 12px",
           outline: "none",
           fontWeight: 900,
+          opacity: disabled ? 0.7 : 1,
         }}
       />
       <button
         type="button"
         onClick={() => {
+          if (disabled) return;
           const t = text.trim();
           if (!t) return;
           onSubmit(t);
           setText("");
         }}
+        disabled={disabled}
         style={{
           width: 90,
           height: 44,
@@ -1257,7 +1416,8 @@ function CommentComposer({ onSubmit }: { onSubmit: (text: string) => void }) {
           background: gold,
           color: "#0B0B0D",
           fontWeight: 900,
-          cursor: "pointer",
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.6 : 1,
         }}
         aria-label="إرسال"
       >

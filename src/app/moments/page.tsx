@@ -1,7 +1,9 @@
-import Link from "next/link";
 import { supabaseServer } from "@/lib/supabase/server";
 import MomentsClient from "./moments-client";
 import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 
 export const dynamic = "force-dynamic";
 
@@ -13,10 +15,102 @@ type MomentsRow = {
   user_id?: unknown;
 };
 
-type UserLike = {
-  email_confirmed_at?: unknown;
-  confirmed_at?: unknown;
-};
+type LocalAuthDb = { users: { id: string; email: string }[]; sessions: { token: string; user_id: string }[] };
+type LocalProfileDb = { profiles: { user_id: string; username: string; phone: string; updated_at: string }[] };
+
+function isLocalMode() {
+  const v = String(process.env.ZOHOR_LOCAL_MODE || "").trim();
+  return v === "1" || v.toLowerCase() === "true";
+}
+
+function dataDir() {
+  return path.join(process.cwd(), ".local-data");
+}
+
+function authDbPath() {
+  return path.join(dataDir(), "auth.json");
+}
+
+function profileDbPath() {
+  return path.join(dataDir(), "profiles.json");
+}
+
+function emailToUsername(email: string) {
+  const e = String(email || "").trim();
+  if (!e.includes("@")) return e;
+  return String(e.split("@")[0] || "").trim();
+}
+
+async function readJsonFile<T>(p: string, fallback: T): Promise<T> {
+  try {
+    const raw = await fs.readFile(p, "utf8");
+    const parsed = JSON.parse(raw) as T;
+    return parsed || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function readLocalAuthDb(): Promise<LocalAuthDb> {
+  await fs.mkdir(dataDir(), { recursive: true });
+  const db = await readJsonFile<Partial<LocalAuthDb>>(authDbPath(), {});
+  const users = Array.isArray(db.users)
+    ? db.users.map((u) => ({ id: String((u as { id?: unknown }).id || ""), email: String((u as { email?: unknown }).email || "") })).filter((u) => u.id && u.email)
+    : [];
+  const sessions = Array.isArray(db.sessions)
+    ? db.sessions
+        .map((s) => ({
+          token: String((s as { token?: unknown }).token || ""),
+          user_id: String((s as { user_id?: unknown }).user_id || ""),
+        }))
+        .filter((s) => s.token && s.user_id)
+    : [];
+  return { users, sessions };
+}
+
+async function readLocalProfileDb(): Promise<LocalProfileDb> {
+  await fs.mkdir(dataDir(), { recursive: true });
+  const db = await readJsonFile<Partial<LocalProfileDb>>(profileDbPath(), {});
+  const profiles = Array.isArray(db.profiles) ? (db.profiles as LocalProfileDb["profiles"]) : [];
+  return { profiles };
+}
+
+async function localMe() {
+  const cookieStore = await cookies();
+  const token = String(cookieStore.get("zohor_local_session")?.value || "").trim();
+  if (!token) return null;
+  const db = await readLocalAuthDb();
+  const s = db.sessions.find((x) => x.token === token) || null;
+  if (!s) return null;
+  const u = db.users.find((x) => x.id === s.user_id) || null;
+  if (!u) return null;
+  return { id: u.id, email: u.email };
+}
+
+async function localUsernameFor(me: { id: string; email: string }) {
+  try {
+    const db = await readLocalProfileDb();
+    const row = db.profiles.find((p) => String(p.user_id || "").trim() === me.id) || null;
+    const username = String(row?.username || "").trim();
+    return username || emailToUsername(me.email);
+  } catch {
+    return emailToUsername(me.email);
+  }
+}
+
+async function withTimeout<T>(p: PromiseLike<T>, ms: number): Promise<T> {
+  let t: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      Promise.resolve(p),
+      new Promise<T>((_, reject) => {
+        t = setTimeout(() => reject(new Error("timeout")), ms);
+      }),
+    ]);
+  } finally {
+    if (t) clearTimeout(t);
+  }
+}
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -26,143 +120,61 @@ function buildSupabaseAdmin() {
 }
 
 export default async function MomentsPage() {
-  const bg = "#000000";
-  const gold = "#C9A24D";
-  const border = "rgba(255,255,255,0.10)";
+  const localMode = isLocalMode();
+  const local = await localMe();
 
-  const supabase = await supabaseServer();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return (
-      <main
-        dir="rtl"
-        style={{
-          minHeight: "100vh",
-          background: bg,
-          color: "#FFFFFF",
-          display: "grid",
-          placeItems: "center",
-          padding: 16,
-          textAlign: "center",
-        }}
-      >
-        <div style={{ maxWidth: 420 }}>
-          <div
-            style={{
-              width: 120,
-              height: 120,
-              borderRadius: 999,
-              border: `2px solid ${gold}`,
-              display: "grid",
-              placeItems: "center",
-              margin: "0 auto 12px",
-              color: gold,
-              fontWeight: 900,
-            }}
-          >
-            لحظة
-          </div>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>يلزم تسجيل الدخول</div>
-          <div style={{ opacity: 0.75, fontSize: 12, marginTop: 6, lineHeight: 1.7 }}>
-            ادخل من صفحة الواجهة ثم عُد لفتح اللحظات.
-          </div>
-          <Link
-            href="/feed"
-            style={{
-              display: "inline-block",
-              marginTop: 12,
-              borderRadius: 999,
-              border: `1px solid ${border}`,
-              background: "rgba(255,255,255,0.03)",
-              color: "#FFFFFF",
-              padding: "10px 14px",
-              textDecoration: "none",
-              fontWeight: 900,
-              fontSize: 12,
-            }}
-          >
-            رجوع للرئيسية
-          </Link>
-        </div>
-      </main>
-    );
+  if (localMode) {
+    const meId = local ? local.id : "";
+    const meUsername = local ? await localUsernameFor(local) : "زائر";
+    return <MomentsClient initialMoments={[]} initialFollowingIds={[]} meId={meId} meUsername={meUsername} />;
   }
 
-  const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-  if (!verified) {
-    return (
-      <main
-        dir="rtl"
-        style={{
-          minHeight: "100vh",
-          background: bg,
-          color: "#FFFFFF",
-          display: "grid",
-          placeItems: "center",
-          padding: 16,
-          textAlign: "center",
-        }}
-      >
-        <div style={{ maxWidth: 420 }}>
-          <div
-            style={{
-              width: 120,
-              height: 120,
-              borderRadius: 999,
-              border: `2px solid ${gold}`,
-              display: "grid",
-              placeItems: "center",
-              margin: "0 auto 12px",
-              color: gold,
-              fontWeight: 900,
-            }}
-          >
-            لحظة
-          </div>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>يلزم توثيق البريد</div>
-          <div style={{ opacity: 0.75, fontSize: 12, marginTop: 6, lineHeight: 1.7 }}>
-            افتح الإعدادات وأعد إرسال رسالة التفعيل ثم وثّق بريدك.
-          </div>
-          <Link
-            href="/settings"
-            style={{
-              display: "inline-block",
-              marginTop: 12,
-              borderRadius: 999,
-              border: `1px solid ${border}`,
-              background: "rgba(255,255,255,0.03)",
-              color: "#FFFFFF",
-              padding: "10px 14px",
-              textDecoration: "none",
-              fontWeight: 900,
-              fontSize: 12,
-            }}
-          >
-            فتح الإعدادات
-          </Link>
-        </div>
-      </main>
-    );
+  let supabase: Awaited<ReturnType<typeof supabaseServer>> | null = null;
+  let user: unknown = null;
+  try {
+    supabase = await withTimeout(supabaseServer(), 2500);
+    const {
+      data: { user: u },
+    } = await withTimeout(supabase.auth.getUser(), 2500);
+    user = u;
+  } catch {
+    if (local) {
+      const meId = local.id;
+      const meUsername = await localUsernameFor(local);
+      return <MomentsClient initialMoments={[]} initialFollowingIds={[]} meId={meId} meUsername={meUsername} />;
+    }
+    return <MomentsClient initialMoments={[]} initialFollowingIds={[]} meId="" meUsername="زائر" />;
   }
 
   const meId = String((user as { id?: unknown } | null)?.id || "").trim();
   let meUsername = "";
-  try {
-    const admin = buildSupabaseAdmin();
-    const client = admin || supabase;
-    const { data: meProfile } = await client.from("profiles").select("username").eq("id", meId).maybeSingle();
-    meUsername = String((meProfile as { username?: unknown } | null)?.username || "").trim();
-  } catch {}
+  if (meId) {
+    try {
+      const admin = buildSupabaseAdmin();
+      const client = admin || supabase;
+      const { data: meProfile } = await withTimeout(
+        client.from("profiles").select("username").eq("id", meId).maybeSingle(),
+        2500
+      );
+      meUsername = String((meProfile as { username?: unknown } | null)?.username || "").trim();
+    } catch {}
+  }
 
-  const { data } = await supabase
-    .from("moments")
-    .select("*")
-    .not("media_url", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(60);
+  let data: MomentsRow[] = [];
+  try {
+    const res = await withTimeout(
+      supabase!
+        .from("moments")
+        .select("*")
+        .not("media_url", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(60),
+      2500
+    );
+    data = ((res as { data?: unknown }).data || []) as MomentsRow[];
+  } catch {
+    data = [];
+  }
 
   const rows = (data || []) as MomentsRow[];
   let initialMoments = rows
@@ -192,43 +204,51 @@ export default async function MomentsPage() {
   );
 
   if (needProfileIds.length) {
-    const admin = buildSupabaseAdmin();
-    const client = admin || supabase;
-    const { data: profileData } = await client.from("profiles").select("id,username").in("id", needProfileIds);
-    if (Array.isArray(profileData) && profileData.length) {
-      const map = new Map<string, string>();
-      for (const row of profileData as Array<{ id?: unknown; username?: unknown }>) {
-        const id = String(row?.id || "").trim();
-        const username = String(row?.username || "").trim();
-        if (id && username) map.set(id, username);
+    try {
+      const admin = buildSupabaseAdmin();
+      const client = admin || supabase;
+      const { data: profileData } = await withTimeout(
+        client.from("profiles").select("id,username").in("id", needProfileIds),
+        2500
+      );
+      if (Array.isArray(profileData) && profileData.length) {
+        const map = new Map<string, string>();
+        for (const row of profileData as Array<{ id?: unknown; username?: unknown }>) {
+          const id = String(row?.id || "").trim();
+          const username = String(row?.username || "").trim();
+          if (id && username) map.set(id, username);
+        }
+        if (map.size) {
+          initialMoments = initialMoments.map((m) => {
+            if (String(m.username || "").trim()) return m;
+            const u = map.get(String(m.userId || "").trim());
+            return u ? { ...m, username: u } : m;
+          });
+        }
       }
-      if (map.size) {
-        initialMoments = initialMoments.map((m) => {
-          if (String(m.username || "").trim()) return m;
-          const u = map.get(String(m.userId || "").trim());
-          return u ? { ...m, username: u } : m;
-        });
-      }
-    }
+    } catch {}
   }
 
   const candidateFollowIds = Array.from(
     new Set(
       initialMoments
         .map((m) => String(m.userId || "").trim())
-        .filter((v) => v && v !== meId)
+        .filter((v) => v && meId && v !== meId)
     )
   );
   let initialFollowingIds: string[] = [];
-  if (candidateFollowIds.length) {
+  if (meId && candidateFollowIds.length) {
     try {
       const admin = buildSupabaseAdmin();
       const client = admin || supabase;
-      const { data: followData } = await client
-        .from("follows")
-        .select("following_id")
-        .eq("follower_id", meId)
-        .in("following_id", candidateFollowIds);
+      const { data: followData } = await withTimeout(
+        client
+          .from("follows")
+          .select("following_id")
+          .eq("follower_id", meId)
+          .in("following_id", candidateFollowIds),
+        2500
+      );
       if (Array.isArray(followData)) {
         initialFollowingIds = (followData as Array<{ following_id?: unknown }>)
           .map((r) => String(r?.following_id || "").trim())
@@ -237,5 +257,5 @@ export default async function MomentsPage() {
     } catch {}
   }
 
-  return <MomentsClient initialMoments={initialMoments} initialFollowingIds={initialFollowingIds} meId={meId} meUsername={meUsername} />;
+  return <MomentsClient initialMoments={initialMoments} initialFollowingIds={initialFollowingIds} meId={meId} meUsername={meUsername || (meId ? "" : "زائر")} />;
 }

@@ -71,6 +71,24 @@ export default function ChatPage() {
   const [groupTitle, setGroupTitle] = React.useState("");
   const [groupPhones, setGroupPhones] = React.useState("");
 
+  const [isMobile, setIsMobile] = React.useState(false);
+  const [mobilePane, setMobilePane] = React.useState<"list" | "chat">("list");
+
+  const bottomRef = React.useRef<HTMLDivElement | null>(null);
+  const prevCountRef = React.useRef(0);
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 860px)");
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    if (typeof mq.addEventListener === "function") {
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
+  }, []);
+
   const refreshMe = React.useCallback(async () => {
     try {
       const res = await fetch("/api/profile", { method: "GET" });
@@ -162,6 +180,7 @@ export default function ChatPage() {
       await refreshConversations();
       setSelectedId(cid);
       setTab("list");
+      if (isMobile) setMobilePane("chat");
       await loadMessages(cid);
     } finally {
       setBusy(false);
@@ -191,6 +210,7 @@ export default function ChatPage() {
       await refreshConversations();
       setSelectedId(cid);
       setTab("list");
+      if (isMobile) setMobilePane("chat");
       await loadMessages(cid);
     } finally {
       setBusy(false);
@@ -203,13 +223,33 @@ export default function ChatPage() {
 
   React.useEffect(() => {
     if (!meId) return;
-    refreshConversations(true);
-  }, [meId, refreshConversations]);
+    refreshConversations(!isMobile);
+  }, [meId, refreshConversations, isMobile]);
 
   React.useEffect(() => {
     if (!selectedId) return;
     loadMessages(selectedId);
   }, [selectedId, loadMessages]);
+
+  React.useEffect(() => {
+    if (!isMobile) return;
+    setMobilePane(selectedId ? "chat" : "list");
+  }, [isMobile, selectedId]);
+
+  React.useEffect(() => {
+    prevCountRef.current = 0;
+  }, [selectedId]);
+
+  React.useEffect(() => {
+    if (!selectedId) return;
+    if (messages.length === 0) return;
+    const prev = prevCountRef.current;
+    prevCountRef.current = messages.length;
+    const behavior: ScrollBehavior = messages.length > prev ? "smooth" : "auto";
+    window.requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ block: "end", behavior });
+    });
+  }, [selectedId, messages.length]);
 
   React.useEffect(() => {
     if (!supabase) return;
@@ -247,34 +287,162 @@ export default function ChatPage() {
 
   const selected = conversations.find((c) => c.id === selectedId) || null;
 
+  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key !== "Enter") return;
+    if (e.shiftKey) return;
+    e.preventDefault();
+    sendMessage();
+  }
+
   return (
     <main
       dir="rtl"
       style={{
         minHeight: "100vh",
-        backgroundColor: bg,
+        background:
+          "radial-gradient(1200px 480px at 50% -40%, rgba(201,162,77,0.18) 0%, rgba(11,11,13,0) 60%), radial-gradient(900px 520px at 0% 10%, rgba(255,255,255,0.06) 0%, rgba(11,11,13,0) 55%), radial-gradient(900px 520px at 100% 15%, rgba(255,255,255,0.04) 0%, rgba(11,11,13,0) 55%), #0B0B0D",
         color: "#FFFFFF",
         padding: 16,
         paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 120px)",
+        ["--bg" as never]: bg,
+        ["--gold" as never]: gold,
+        ["--border" as never]: border,
       }}
     >
-      <div style={{ maxWidth: 860, margin: "0 auto" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="chatWrap">
+        <style>{`
+          .chatWrap { max-width: 980px; margin: 0 auto; }
+          .chatTop { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+          .chatTopLeft { display: flex; align-items: center; gap: 10px; }
+          .chatChipLink {
+            height: 40px;
+            padding: 0 14px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.03);
+            color: #FFFFFF;
+            text-decoration: none;
+            display: grid;
+            place-items: center;
+            font-weight: 1000;
+            box-shadow: 0 14px 30px rgba(0,0,0,0.30);
+          }
+          .chatSubtleText { font-size: 12px; font-weight: 900; opacity: 0.86; }
+          .chatCard {
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.03);
+            box-shadow: 0 20px 44px rgba(0,0,0,0.36);
+          }
+          .chatGrid { margin-top: 14px; display: grid; gap: 12px; grid-template-columns: 320px 1fr; }
+          @media (max-width: 860px) {
+            .chatGrid { grid-template-columns: 1fr; }
+          }
+          .chatSide { padding: 12px; }
+          .chatTabs { display: flex; gap: 8px; margin-bottom: 10px; }
+          .chatTabBtn {
+            flex: 1;
+            height: 40px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: #FFFFFF;
+            font-weight: 1000;
+            cursor: pointer;
+          }
+          .chatTabBtnActive {
+            background: rgba(201,162,77,0.16);
+            color: var(--gold);
+            border-color: rgba(201,162,77,0.34);
+          }
+          .chatInput, .chatTextarea {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.03);
+            color: #FFFFFF;
+            outline: none;
+            font-weight: 900;
+            width: 100%;
+            font: inherit;
+          }
+          .chatInput { height: 44px; padding: 0 12px; }
+          .chatTextarea { padding: 12px; resize: vertical; }
+          .chatInput:focus, .chatTextarea:focus {
+            border-color: rgba(201,162,77,0.55);
+            box-shadow: 0 0 0 4px rgba(201,162,77,0.10);
+          }
+          .chatGoldBtn {
+            height: 44px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,0,0,0.22);
+            background: var(--gold);
+            color: #0B0B0D;
+            font-weight: 1000;
+            cursor: pointer;
+            box-shadow: 0 18px 36px rgba(0,0,0,0.35);
+          }
+          .chatGhostBtn {
+            height: 40px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.02);
+            color: #FFFFFF;
+            font-weight: 1000;
+            cursor: pointer;
+          }
+          .chatConvBtn {
+            width: 100%;
+            text-align: right;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.02);
+            padding: 12px;
+            cursor: pointer;
+          }
+          .chatConvBtnActive {
+            background: rgba(201,162,77,0.14);
+            border-color: rgba(201,162,77,0.34);
+          }
+          .chatPanel { padding: 12px; min-height: 520px; display: flex; flex-direction: column; }
+          @media (max-width: 860px) {
+            .chatPanel { min-height: 62vh; }
+          }
+          .chatMessages { margin-top: 10px; flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 2px; }
+          .chatRow { display: flex; }
+          .chatRowMine { justify-content: flex-end; }
+          .chatRowOther { justify-content: flex-start; }
+          .chatBubble {
+            max-width: 78%;
+            border-radius: 18px;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            font-weight: 900;
+            line-height: 1.65;
+            white-space: pre-wrap;
+            word-break: break-word;
+          }
+          .chatBubbleMine {
+            background: linear-gradient(135deg, rgba(201,162,77,0.96) 0%, rgba(201,162,77,0.64) 100%);
+            border-color: rgba(201,162,77,0.40);
+            color: #0B0B0D;
+            box-shadow: 0 18px 34px rgba(0,0,0,0.34);
+          }
+          .chatBubbleOther {
+            background: rgba(255,255,255,0.05);
+            box-shadow: 0 14px 28px rgba(0,0,0,0.24);
+          }
+          .chatComposer { margin-top: 10px; display: flex; gap: 10px; align-items: flex-end; }
+          .chatSendBtn { width: 96px; }
+          @media (max-width: 420px) {
+            .chatSendBtn { width: 86px; }
+          }
+        `}</style>
+
+        <div className="chatTop">
+          <div className="chatTopLeft">
             <Link
               href="/feed"
-              style={{
-                height: 40,
-                padding: "0 14px",
-                borderRadius: 14,
-                border: `1px solid ${border}`,
-                background: "rgba(255,255,255,0.03)",
-                color: "#FFFFFF",
-                textDecoration: "none",
-                display: "grid",
-                placeItems: "center",
-                fontWeight: 1000,
-              }}
+              className="chatChipLink"
             >
               رجوع
             </Link>
@@ -283,101 +451,47 @@ export default function ChatPage() {
           {!meId ? (
             <Link
               href="/settings"
-              style={{
-                height: 40,
-                padding: "0 14px",
-                borderRadius: 14,
-                border: `1px solid ${border}`,
-                background: "rgba(255,255,255,0.03)",
-                color: "#FFFFFF",
-                textDecoration: "none",
-                display: "grid",
-                placeItems: "center",
-                fontWeight: 1000,
-              }}
+              className="chatChipLink"
             >
-              تسجيل الدخول
+              الإعدادات
             </Link>
           ) : (
-            <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
-              {mePhone ? `رقمك: ${mePhone}` : "أضف رقمك من الإعدادات"}
-            </div>
+            <div className="chatSubtleText">{mePhone ? `رقمك: ${mePhone}` : "أضف رقمك من الإعدادات"}</div>
           )}
         </div>
 
         {!meId ? (
           <div
-            style={{
-              marginTop: 14,
-              borderRadius: 18,
-              border: `1px solid ${border}`,
-              background: "rgba(255,255,255,0.02)",
-              padding: 14,
-              fontWeight: 900,
-              lineHeight: 1.7,
-              opacity: 0.9,
-            }}
+            className="chatCard"
+            style={{ marginTop: 14, padding: 14, fontWeight: 900, lineHeight: 1.7, opacity: 0.92 }}
           >
-            لبدء المحادثات برقم الجوال: سجّل دخول ثم احفظ رقمك من صفحة الإعدادات.
+            صفحة التواصل غير متاحة حالياً.
           </div>
         ) : null}
 
         {meId ? (
-          <div style={{ marginTop: 14, display: "grid", gap: 12, gridTemplateColumns: "320px 1fr" }}>
-            <div
-              style={{
-                borderRadius: 18,
-                border: `1px solid ${border}`,
-                background: "rgba(255,255,255,0.02)",
-                padding: 12,
-              }}
-            >
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <div className="chatGrid">
+            {!isMobile || mobilePane === "list" ? (
+              <div className="chatCard chatSide">
+              <div className="chatTabs">
                 <button
                   type="button"
                   onClick={() => setTab("list")}
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    borderRadius: 14,
-                    border: `1px solid ${border}`,
-                    background: tab === "list" ? "rgba(201,162,77,0.18)" : "transparent",
-                    color: tab === "list" ? gold : "#FFFFFF",
-                    fontWeight: 1000,
-                    cursor: "pointer",
-                  }}
+                  className={`chatTabBtn ${tab === "list" ? "chatTabBtnActive" : ""}`}
                 >
                   المحادثات
                 </button>
                 <button
                   type="button"
                   onClick={() => setTab("direct")}
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    borderRadius: 14,
-                    border: `1px solid ${border}`,
-                    background: tab === "direct" ? "rgba(201,162,77,0.18)" : "transparent",
-                    color: tab === "direct" ? gold : "#FFFFFF",
-                    fontWeight: 1000,
-                    cursor: "pointer",
-                  }}
+                  className={`chatTabBtn ${tab === "direct" ? "chatTabBtnActive" : ""}`}
                 >
                   خاص
                 </button>
                 <button
                   type="button"
                   onClick={() => setTab("group")}
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    borderRadius: 14,
-                    border: `1px solid ${border}`,
-                    background: tab === "group" ? "rgba(201,162,77,0.18)" : "transparent",
-                    color: tab === "group" ? gold : "#FFFFFF",
-                    fontWeight: 1000,
-                    cursor: "pointer",
-                  }}
+                  className={`chatTabBtn ${tab === "group" ? "chatTabBtnActive" : ""}`}
                 >
                   قروب
                 </button>
@@ -391,31 +505,14 @@ export default function ChatPage() {
                     onChange={(e) => setDirectPhone(e.target.value)}
                     placeholder="+9665xxxxxxx"
                     autoComplete="tel"
-                    style={{
-                      height: 44,
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "rgba(255,255,255,0.02)",
-                      color: "#FFFFFF",
-                      padding: "0 12px",
-                      outline: "none",
-                      fontWeight: 900,
-                    }}
+                    className="chatInput"
                   />
                   <button
                     type="button"
                     onClick={startDirect}
                     disabled={busy}
-                    style={{
-                      height: 44,
-                      borderRadius: 14,
-                      border: "1px solid rgba(0,0,0,0.22)",
-                      background: gold,
-                      color: "#0B0B0D",
-                      fontWeight: 1000,
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.7 : 1,
-                    }}
+                    className="chatGoldBtn"
+                    style={{ cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.7 : 1 }}
                   >
                     بدء محادثة
                   </button>
@@ -429,48 +526,22 @@ export default function ChatPage() {
                     value={groupTitle}
                     onChange={(e) => setGroupTitle(e.target.value)}
                     placeholder="مثال: الأصدقاء"
-                    style={{
-                      height: 44,
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "rgba(255,255,255,0.02)",
-                      color: "#FFFFFF",
-                      padding: "0 12px",
-                      outline: "none",
-                      fontWeight: 900,
-                    }}
+                    className="chatInput"
                   />
                   <div style={{ fontWeight: 900, fontSize: 12, opacity: 0.9 }}>أرقام الأعضاء (سطر أو فاصلة)</div>
                   <textarea
                     value={groupPhones}
                     onChange={(e) => setGroupPhones(e.target.value)}
                     placeholder="+9665xxxxxxx, +9665yyyyyyy"
-                    style={{
-                      minHeight: 86,
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "rgba(255,255,255,0.02)",
-                      color: "#FFFFFF",
-                      padding: 12,
-                      outline: "none",
-                      fontWeight: 900,
-                      resize: "vertical",
-                    }}
+                    className="chatTextarea"
+                    style={{ minHeight: 86 }}
                   />
                   <button
                     type="button"
                     onClick={createGroup}
                     disabled={busy}
-                    style={{
-                      height: 44,
-                      borderRadius: 14,
-                      border: "1px solid rgba(0,0,0,0.22)",
-                      background: gold,
-                      color: "#0B0B0D",
-                      fontWeight: 1000,
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.7 : 1,
-                    }}
+                    className="chatGoldBtn"
+                    style={{ cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.7 : 1 }}
                   >
                     إنشاء قروب
                   </button>
@@ -483,16 +554,8 @@ export default function ChatPage() {
                     type="button"
                     onClick={() => refreshConversations()}
                     disabled={busy}
-                    style={{
-                      height: 40,
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "transparent",
-                      color: "#FFFFFF",
-                      fontWeight: 1000,
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.7 : 1,
-                    }}
+                    className="chatGhostBtn"
+                    style={{ cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.7 : 1 }}
                   >
                     تحديث
                   </button>
@@ -512,16 +575,9 @@ export default function ChatPage() {
                         onClick={() => {
                           setSelectedId(c.id);
                           setTab("list");
+                          if (isMobile) setMobilePane("chat");
                         }}
-                        style={{
-                          width: "100%",
-                          textAlign: "right",
-                          borderRadius: 16,
-                          border: `1px solid ${border}`,
-                          background: active ? "rgba(201,162,77,0.14)" : "rgba(255,255,255,0.01)",
-                          padding: 12,
-                          cursor: "pointer",
-                        }}
+                        className={`chatConvBtn ${active ? "chatConvBtnActive" : ""}`}
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
                           <div style={{ fontWeight: 1000 }}>{label}</div>
@@ -537,46 +593,41 @@ export default function ChatPage() {
                   })}
                 </div>
               ) : null}
-            </div>
+              </div>
+            ) : null}
 
-            <div
-              style={{
-                borderRadius: 18,
-                border: `1px solid ${border}`,
-                background: "rgba(255,255,255,0.02)",
-                padding: 12,
-                minHeight: 520,
-                display: "flex",
-                flexDirection: "column",
-              }}
-            >
+            {!isMobile || mobilePane === "chat" ? (
+              <div className="chatCard chatPanel">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
                 <div style={{ fontWeight: 1000 }}>
                   {selected ? (selected.type === "group" ? selected.title || "قروب" : "محادثة خاصة") : "اختر محادثة"}
                 </div>
-                {selectedId ? (
-                  <button
-                    type="button"
-                    onClick={() => loadMessages(selectedId)}
-                    disabled={busy}
-                    style={{
-                      height: 40,
-                      padding: "0 14px",
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "transparent",
-                      color: "#FFFFFF",
-                      fontWeight: 1000,
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.7 : 1,
-                    }}
-                  >
-                    تحديث
-                  </button>
-                ) : null}
+                <div style={{ display: "flex", gap: 8 }}>
+                  {isMobile ? (
+                    <button
+                      type="button"
+                      onClick={() => setMobilePane("list")}
+                      className="chatGhostBtn"
+                      style={{ padding: "0 12px" }}
+                    >
+                      المحادثات
+                    </button>
+                  ) : null}
+                  {selectedId ? (
+                    <button
+                      type="button"
+                      onClick={() => loadMessages(selectedId)}
+                      disabled={busy}
+                      className="chatGhostBtn"
+                      style={{ padding: "0 14px", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.7 : 1 }}
+                    >
+                      تحديث
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
-              <div style={{ marginTop: 10, flex: 1, overflow: "auto", display: "grid", gap: 8, padding: "4px 0" }}>
+              <div className="chatMessages">
                 {selectedId && messages.length === 0 ? (
                   <div style={{ fontSize: 12, opacity: 0.85, fontWeight: 900 }}>لا توجد رسائل.</div>
                 ) : null}
@@ -586,68 +637,41 @@ export default function ChatPage() {
                 {messages.map((m) => {
                   const mine = m.sender_id === meId;
                   return (
-                    <div key={m.id} style={{ display: "flex", justifyContent: mine ? "flex-start" : "flex-end" }}>
+                    <div key={m.id} className={`chatRow ${mine ? "chatRowMine" : "chatRowOther"}`}>
                       <div
-                        style={{
-                          maxWidth: "78%",
-                          borderRadius: 16,
-                          padding: "10px 12px",
-                          background: mine ? "rgba(201,162,77,0.22)" : "rgba(255,255,255,0.06)",
-                          border: `1px solid ${border}`,
-                          fontWeight: 900,
-                          lineHeight: 1.6,
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
-                        }}
+                        className={`chatBubble ${mine ? "chatBubbleMine" : "chatBubbleOther"}`}
                       >
                         {m.body}
                       </div>
                     </div>
                   );
                 })}
+                <div ref={bottomRef} />
               </div>
 
               {selectedId ? (
-                <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "flex-end" }}>
+                <div className="chatComposer">
                   <textarea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
+                    onKeyDown={onComposerKeyDown}
                     placeholder="اكتب رسالة..."
-                    style={{
-                      flex: 1,
-                      minHeight: 44,
-                      maxHeight: 140,
-                      borderRadius: 14,
-                      border: `1px solid ${border}`,
-                      background: "rgba(255,255,255,0.02)",
-                      color: "#FFFFFF",
-                      padding: 12,
-                      outline: "none",
-                      fontWeight: 900,
-                      resize: "vertical",
-                    }}
+                    className="chatTextarea"
+                    style={{ flex: 1, minHeight: 44, maxHeight: 140 }}
                   />
                   <button
                     type="button"
                     onClick={sendMessage}
                     disabled={busy}
-                    style={{
-                      width: 96,
-                      height: 44,
-                      borderRadius: 14,
-                      border: "1px solid rgba(0,0,0,0.22)",
-                      background: gold,
-                      color: "#0B0B0D",
-                      fontWeight: 1000,
-                      cursor: busy ? "not-allowed" : "pointer",
-                      opacity: busy ? 0.7 : 1,
-                    }}
+                    className="chatGoldBtn chatSendBtn"
+                    style={{ cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.7 : 1 }}
                   >
                     إرسال
                   </button>
                 </div>
               ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
