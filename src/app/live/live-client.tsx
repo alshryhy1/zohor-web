@@ -119,6 +119,7 @@ export default function LiveClient() {
 
   const appIdEnv = String(process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim();
   const [agoraAppId, setAgoraAppId] = React.useState(appIdEnv);
+  const [envChecked, setEnvChecked] = React.useState(!!appIdEnv);
   const supabase = React.useMemo(() => buildSupabaseClient(), []);
 
   const [channel] = React.useState(initialChannel);
@@ -337,6 +338,36 @@ export default function LiveClient() {
     const returnedAppId = String(json.appId || "").trim();
     return { token, appId: returnedAppId };
   }, []);
+
+  React.useEffect(() => {
+    if (envChecked) return;
+    if (agoraAppId) {
+      setEnvChecked(true);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/agora/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ channel: "__probe__", uid: 1, role: "audience" }),
+        });
+        const json = (await res.json().catch(() => null)) as { ok?: unknown; appId?: unknown } | null;
+        if (!cancelled && res.ok && json && json.ok) {
+          const aid = String(json.appId || "").trim();
+          if (aid) setAgoraAppId(aid);
+        }
+      } catch {
+      } finally {
+        if (!cancelled) setEnvChecked(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [agoraAppId, envChecked]);
 
   const playRemote = React.useCallback(() => {
     const client = clientRef.current;
@@ -1071,7 +1102,7 @@ export default function LiveClient() {
         )}
       </div>
 
-      {!agoraAppId ? (
+      {envChecked && !agoraAppId ? (
         <div
           onClick={(e) => e.stopPropagation()}
           style={{

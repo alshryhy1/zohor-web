@@ -36,7 +36,11 @@ function isLocalMode() {
 }
 
 function dataDir() {
-  return path.join(process.cwd(), ".local-data");
+  const cwd = process.cwd();
+  const serverless = cwd === "/var/task" || cwd.startsWith("/var/task/") || !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const tmp = String(process.env.TMPDIR || process.env.TEMP || process.env.TMP || "/tmp").trim() || "/tmp";
+  const base = serverless ? tmp : cwd;
+  return path.join(base, ".local-data");
 }
 
 function authDbPath() {

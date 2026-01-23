@@ -71,6 +71,10 @@ function isLocalMode() {
   return v === "1" || v.toLowerCase() === "true";
 }
 
+function isProdRuntime() {
+  return process.env.NODE_ENV === "production" || !!process.env.VERCEL;
+}
+
 async function withTimeout<T>(p: PromiseLike<T>, ms: number): Promise<T> {
   let t: NodeJS.Timeout | null = null;
   try {
@@ -107,7 +111,11 @@ function jsonWithCookies(cookieRes: NextResponse, body: unknown, status = 200) {
 }
 
 function dataDir() {
-  return path.join(process.cwd(), ".local-data");
+  const cwd = process.cwd();
+  const serverless = cwd === "/var/task" || cwd.startsWith("/var/task/") || !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const tmp = String(process.env.TMPDIR || process.env.TEMP || process.env.TMP || "/tmp").trim() || "/tmp";
+  const base = serverless ? tmp : cwd;
+  return path.join(base, ".local-data");
 }
 
 function authDbPath() {
@@ -218,7 +226,10 @@ function buildSupabase(req: NextRequest, res: NextResponse) {
   if (isLocalMode()) return null;
   const url = normalizeSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
   const anon = normalizeKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
-  if (!url || !anon) return null;
+  if (!url || !anon) {
+    if (isProdRuntime()) throw new Error("missing env: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY");
+    return null;
+  }
 
   const reqCookies = req.cookies.getAll();
   return createServerClient(url, anon, {
@@ -350,7 +361,15 @@ export async function POST(req: NextRequest) {
 
     return jsonWithCookies(cookieRes, { ok: false, code: "bad_request", message: "action غير صالح." }, 400);
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
+    const raw = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
+    const message = String(raw || "").trim();
+    const low = message.toLowerCase();
+    if (low.includes("missing env:")) {
+      return jsonWithCookies(cookieRes, { ok: false, code: "server_misconfig", message: "إعدادات الدخول غير مكتملة على السيرفر." }, 500);
+    }
+    if (low.includes(".local-data") || low.includes("mkdir")) {
+      return jsonWithCookies(cookieRes, { ok: false, code: "server_misconfig", message: "إعدادات السيرفر غير مكتملة." }, 500);
+    }
     return jsonWithCookies(cookieRes, { ok: false, code: "server_error", message }, 500);
   }
 }
