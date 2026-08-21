@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { supabaseServer } from "@/lib/supabase/server";
-
-type UserLike = {
-  email_confirmed_at?: unknown;
-  confirmed_at?: unknown;
-};
+import { authErrorResponse, getAuthenticatedUser, userEmailVerified, userId } from "@/lib/supabase/auth";
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -24,23 +19,15 @@ function isMissingTableErrorMessage(message: string) {
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseServer();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getAuthenticatedUser(req);
 
-    if (!user) {
-      return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-    }
-
-    const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-    if (!verified) {
+    if (!userEmailVerified(user)) {
       return NextResponse.json({ ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." }, { status: 403 });
     }
 
     const body = (await req.json()) as { targetUserId?: unknown } | null;
     const targetUserId = String(body?.targetUserId || "").trim();
-    const meId = String((user as { id?: unknown } | null)?.id || "").trim();
+    const meId = userId(user);
 
     if (!targetUserId) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "targetUserId مطلوب." }, { status: 400 });
@@ -53,9 +40,11 @@ export async function POST(req: Request) {
     }
 
     const admin = buildSupabaseAdmin();
-    const client = admin || supabase;
+    if (!admin) {
+      return NextResponse.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
+    }
 
-    const { data: existing, error: existsErr } = await client
+    const { data: existing, error: existsErr } = await admin
       .from("follows")
       .select("following_id")
       .eq("follower_id", meId)
@@ -74,7 +63,7 @@ export async function POST(req: Request) {
 
     const isFollowing = !!existing;
     if (isFollowing) {
-      const { error: delErr } = await client.from("follows").delete().eq("follower_id", meId).eq("following_id", targetUserId);
+      const { error: delErr } = await admin.from("follows").delete().eq("follower_id", meId).eq("following_id", targetUserId);
       if (delErr) {
         if (isMissingTableErrorMessage(delErr.message)) {
           return NextResponse.json(
@@ -87,7 +76,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, following: false }, { status: 200 });
     }
 
-    const { error: insErr } = await client.from("follows").insert({ follower_id: meId, following_id: targetUserId });
+    const { error: insErr } = await admin.from("follows").insert({ follower_id: meId, following_id: targetUserId });
     if (insErr) {
       if (isMissingTableErrorMessage(insErr.message)) {
         return NextResponse.json(
@@ -100,6 +89,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, following: true }, { status: 200 });
   } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return NextResponse.json({ ok: false, code: "server_error", message }, { status: 500 });
   }

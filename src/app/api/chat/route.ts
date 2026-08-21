@@ -1,95 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
-import { supabaseServer } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedUser, userId } from "@/lib/supabase/auth";
 import { type NextRequest } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
-type UserLike = { id?: unknown };
-
 type ConversationType = "direct" | "group";
-
-const CHAT_SCHEMA_SQL = `create extension if not exists pgcrypto;
-
-create table if not exists public.conversations (
-  id uuid primary key default gen_random_uuid(),
-  type text not null check (type in ('direct','group')),
-  title text,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.conversation_members (
-  conversation_id uuid not null references public.conversations(id) on delete cascade,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (conversation_id, user_id)
-);
-
-create index if not exists conversation_members_user_id_idx on public.conversation_members(user_id);
-
-create table if not exists public.messages (
-  id uuid primary key default gen_random_uuid(),
-  conversation_id uuid not null references public.conversations(id) on delete cascade,
-  sender_id uuid not null references auth.users(id) on delete cascade,
-  body text not null,
-  created_at timestamptz not null default now()
-);
-
-create index if not exists messages_conversation_id_created_at_idx on public.messages(conversation_id, created_at);
-
-alter table public.conversations enable row level security;
-alter table public.conversation_members enable row level security;
-alter table public.messages enable row level security;
-
-drop policy if exists "conversations_select_for_members" on public.conversations;
-create policy "conversations_select_for_members"
-on public.conversations
-for select
-to authenticated
-using (
-  exists (
-    select 1
-    from public.conversation_members cm
-    where cm.conversation_id = conversations.id
-      and cm.user_id = auth.uid()
-  )
-);
-
-drop policy if exists "conversation_members_select_self" on public.conversation_members;
-create policy "conversation_members_select_self"
-on public.conversation_members
-for select
-to authenticated
-using (user_id = auth.uid());
-
-drop policy if exists "messages_select_for_members" on public.messages;
-create policy "messages_select_for_members"
-on public.messages
-for select
-to authenticated
-using (
-  exists (
-    select 1
-    from public.conversation_members cm
-    where cm.conversation_id = messages.conversation_id
-      and cm.user_id = auth.uid()
-  )
-);
-
-drop policy if exists "messages_insert_for_members" on public.messages;
-create policy "messages_insert_for_members"
-on public.messages
-for insert
-to authenticated
-with check (
-  sender_id = auth.uid()
-  and exists (
-    select 1
-    from public.conversation_members cm
-    where cm.conversation_id = messages.conversation_id
-      and cm.user_id = auth.uid()
-  )
-);`;
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -330,12 +246,9 @@ function isMissingTableError(message: string) {
   return low.includes("does not exist") || (low.includes("could not find") && low.includes("schema cache"));
 }
 
-async function getMeId() {
-  const supabase = await supabaseServer();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  const meId = String((user as UserLike | null)?.id || "").trim();
+async function getMeId(req: NextRequest) {
+  const { user } = await getAuthenticatedUser(req);
+  const meId = userId(user);
   return { user, meId };
 }
 
@@ -351,10 +264,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
     const action = String(body?.action || "").trim();
-
-    if (action === "schema_sql") {
-      return Response.json({ ok: true, sql: CHAT_SCHEMA_SQL }, { status: 200 });
-    }
 
     const local = await localMe(req);
     const isProd = process.env.NODE_ENV === "production";
@@ -420,7 +329,7 @@ export async function POST(req: NextRequest) {
     let user: unknown = null;
     let meId = "";
     try {
-      const r = await getMeId();
+      const r = await getMeId(req);
       user = r.user;
       meId = r.meId;
     } catch (e: unknown) {
@@ -523,10 +432,7 @@ export async function POST(req: NextRequest) {
       if (mErr) {
         const msg = String(mErr.message || "");
         if (isMissingTableError(msg)) {
-          return Response.json(
-            { ok: false, code: "missing_tables", message: "جداول المحادثات غير موجودة في Supabase.", sql: CHAT_SCHEMA_SQL },
-            { status: 400 }
-          );
+          return Response.json({ ok: false, code: "missing_tables", message: "جداول المحادثات غير موجودة في Supabase." }, { status: 400 });
         }
         return Response.json({ ok: false, code: "query_failed", message: mErr.message }, { status: 500 });
       }
@@ -581,10 +487,11 @@ export async function POST(req: NextRequest) {
         .from("messages")
         .select("id,conversation_id,sender_id,body,created_at")
         .eq("conversation_id", conversationId)
-        .order("created_at", { ascending: true })
+        .order("created_at", { ascending: false })
         .limit(80);
       if (error) return Response.json({ ok: false, code: "query_failed", message: error.message }, { status: 500 });
-      return Response.json({ ok: true, messages: Array.isArray(messages) ? messages : [] }, { status: 200 });
+      const ordered = Array.isArray(messages) ? [...messages].reverse() : [];
+      return Response.json({ ok: true, messages: ordered }, { status: 200 });
     }
 
     if (action === "start_direct") {
@@ -692,6 +599,8 @@ export async function POST(req: NextRequest) {
 
     return jsonBadRequest("إجراء غير معروف.", "unknown_action");
   } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return Response.json({ ok: false, code: "server_error", message }, { status: 500 });
   }

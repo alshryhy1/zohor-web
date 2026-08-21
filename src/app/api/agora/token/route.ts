@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { RtcTokenBuilder, RtcRole } from "agora-token";
-import { supabaseServer } from "@/lib/supabase/server";
-
-type UserLike = {
-  email_confirmed_at?: unknown;
-  confirmed_at?: unknown;
-};
+import { authErrorResponse, getAuthenticatedUser, userEmailVerified } from "@/lib/supabase/auth";
 
 export async function POST(req: Request) {
   try {
@@ -32,22 +27,10 @@ export async function POST(req: Request) {
     }
 
     const isHost = roleRaw === "host";
-    const isProd = process.env.NODE_ENV === "production";
+    const { user } = await getAuthenticatedUser(req);
 
-    if (isHost && isProd) {
-      const supabase = await supabaseServer();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-      }
-
-      const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-      if (!verified) {
-        return NextResponse.json({ ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." }, { status: 403 });
-      }
+    if (isHost && !userEmailVerified(user)) {
+      return NextResponse.json({ ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." }, { status: 403 });
     }
 
     const role = isHost ? RtcRole.PUBLISHER : RtcRole.SUBSCRIBER;
@@ -59,6 +42,8 @@ export async function POST(req: Request) {
       { status: 200, headers: { "Cache-Control": "no-store" } }
     );
   } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return NextResponse.json({ ok: false, code: "server_error", message }, { status: 500 });
   }

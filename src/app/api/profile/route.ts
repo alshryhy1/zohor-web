@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "@/lib/supabase/server";
+import { authErrorResponse, bearerTokenFromRequest, getAuthenticatedUser, userId } from "@/lib/supabase/auth";
 import { type NextRequest } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -202,8 +203,93 @@ async function localUpsertProfile(me: { id: string; email: string }, phone: stri
   return { ok: true as const, phone, username };
 }
 
+async function getBearerProfile(req: NextRequest) {
+  try {
+    const { user } = await getAuthenticatedUser(req);
+    const meId = userId(user);
+    if (!meId) return Response.json({ ok: false, code: "unauthorized", message: "تعذر تحديد المستخدم." }, { status: 401 });
+
+    const admin = buildSupabaseAdmin();
+    if (!admin) {
+      return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
+    }
+
+    const { data, error } = await admin.from("profiles").select("id,username,phone").eq("id", meId).maybeSingle();
+    if (error) {
+      const msg = String(error.message || "");
+      if (isMissingColumnError(msg, "phone")) {
+        return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
+      }
+      return Response.json({ ok: false, code: "query_failed", message: error.message }, { status: 500 });
+    }
+
+    const phone = normalizePhone(String((data as { phone?: unknown } | null)?.phone || ""));
+    const username = String((data as { username?: unknown } | null)?.username || "").trim() || deriveUsername(user);
+    return Response.json({ ok: true, profile: { id: meId, username, phone } }, { status: 200 });
+  } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
+    const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
+    return Response.json({ ok: false, code: "server_error", message }, { status: 500 });
+  }
+}
+
+async function postBearerProfile(req: NextRequest) {
+  try {
+    const { user } = await getAuthenticatedUser(req);
+    const meId = userId(user);
+    if (!meId) return Response.json({ ok: false, code: "unauthorized", message: "تعذر تحديد المستخدم." }, { status: 401 });
+
+    const body = (await req.json().catch(() => null)) as { phone?: unknown; username?: unknown } | null;
+    const phone = normalizePhone(String(body?.phone || ""));
+    const requestedUsername = String(body?.username || "").trim();
+    if (!phone) return Response.json({ ok: false, code: "bad_request", message: "رقم الجوال مطلوب." }, { status: 400 });
+
+    const admin = buildSupabaseAdmin();
+    if (!admin) {
+      return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
+    }
+
+    const { data: taken } = await admin.from("profiles").select("id").eq("phone", phone).neq("id", meId).limit(1);
+    if (Array.isArray(taken) && taken.length > 0) {
+      return Response.json({ ok: false, code: "phone_taken", message: "رقم الجوال مستخدم." }, { status: 409 });
+    }
+
+    const { data: meProfile, error: meErr } = await admin.from("profiles").select("id,username").eq("id", meId).maybeSingle();
+    if (meErr) {
+      const msg = String(meErr.message || "");
+      if (isMissingColumnError(msg, "phone")) {
+        return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
+      }
+      return Response.json({ ok: false, code: "query_failed", message: meErr.message }, { status: 500 });
+    }
+
+    const username = requestedUsername || String((meProfile as { username?: unknown } | null)?.username || "").trim() || deriveUsername(user);
+    const error = meProfile
+      ? (await admin.from("profiles").update({ phone, username }).eq("id", meId)).error
+      : (await admin.from("profiles").insert({ id: meId, phone, username })).error;
+
+    if (error) {
+      const msg = String(error.message || "");
+      if (isMissingColumnError(msg, "phone")) {
+        return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
+      }
+      return Response.json({ ok: false, code: "update_failed", message: error.message }, { status: 500 });
+    }
+
+    return Response.json({ ok: true, phone, username }, { status: 200 });
+  } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
+    const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
+    return Response.json({ ok: false, code: "server_error", message }, { status: 500 });
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
+    if (bearerTokenFromRequest(req)) return getBearerProfile(req);
+
     const local = await localMe(req);
     const isProd = process.env.NODE_ENV === "production";
     const localMode = isLocalMode();
@@ -275,6 +361,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    if (bearerTokenFromRequest(req)) return postBearerProfile(req);
+
     const local = await localMe(req);
     const isProd = process.env.NODE_ENV === "production";
     const localMode = isLocalMode();

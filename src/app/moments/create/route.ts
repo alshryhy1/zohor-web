@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { supabaseServer } from "@/lib/supabase/server";
-
-type UserLike = {
-  email_confirmed_at?: unknown;
-  confirmed_at?: unknown;
-};
+import { authErrorResponse, getAuthenticatedUser, userEmailVerified, userId } from "@/lib/supabase/auth";
 
 function deriveUsername(user: unknown) {
   const u = user as { email?: unknown; phone?: unknown; id?: unknown; user_metadata?: Record<string, unknown> } | null;
@@ -54,17 +49,9 @@ function isMissingColumnError(message: string, column: string) {
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseServer();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getAuthenticatedUser(req);
 
-    if (!user) {
-      return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-    }
-
-    const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-    if (!verified) {
+    if (!userEmailVerified(user)) {
       return NextResponse.json(
         { ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." },
         { status: 403 }
@@ -79,16 +66,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "mediaUrl مطلوب." }, { status: 400 });
     }
 
-    const userId = String((user as { id?: unknown } | null)?.id || "").trim();
+    const meId = userId(user);
     const admin = buildSupabaseAdmin();
     const profileUsername = admin
-      ? await fetchProfileUsername(admin, userId)
-      : await fetchProfileUsername(supabase, userId);
+      ? await fetchProfileUsername(admin, meId)
+      : "";
     const username = profileUsername || deriveUsername(user);
     const basePayload = { title: "لحظة", desc: desc || null, media_url: mediaUrl };
-    const richPayload = { ...basePayload, user_id: userId || null, username: username || null };
-    const usernameOnlyPayload = { ...basePayload, username: username || null };
-    const userIdOnlyPayload = { ...basePayload, user_id: userId || null };
+    const richPayload = { ...basePayload, user_id: meId || null, username: username || null };
+    const userIdOnlyPayload = { ...basePayload, user_id: meId || null };
 
     if (admin) {
       const { error: richErr } = await admin.from("moments").insert(richPayload);
@@ -96,41 +82,25 @@ export async function POST(req: Request) {
         const msg = String(richErr.message || "");
         const missingUserId = isMissingColumnError(msg, "user_id");
         const missingUsername = isMissingColumnError(msg, "username");
-        if (missingUserId || missingUsername) {
-          if (missingUserId && !missingUsername) {
-            const { error } = await admin.from("moments").insert(usernameOnlyPayload);
-            if (!error) return NextResponse.json({ ok: true }, { status: 200 });
-          } else if (!missingUserId && missingUsername) {
+        if (missingUserId) {
+          return NextResponse.json(
+            { ok: false, code: "missing_column", message: 'يلزم إضافة عمود user_id لجدول moments.' },
+            { status: 500 }
+          );
+        }
+        if (missingUsername) {
             const { error } = await admin.from("moments").insert(userIdOnlyPayload);
             if (!error) return NextResponse.json({ ok: true }, { status: 200 });
-          }
-          const { error: baseErr } = await admin.from("moments").insert(basePayload);
-          if (baseErr) return NextResponse.json({ ok: false, code: "insert_failed", message: baseErr.message }, { status: 500 });
-        } else return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
+        }
+        return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
       }
       return NextResponse.json({ ok: true }, { status: 200 });
     }
 
-    const { error: richErr } = await supabase.from("moments").insert(richPayload);
-    if (richErr) {
-      const msg = String(richErr.message || "");
-      const missingUserId = isMissingColumnError(msg, "user_id");
-      const missingUsername = isMissingColumnError(msg, "username");
-      if (missingUserId || missingUsername) {
-        if (missingUserId && !missingUsername) {
-          const { error } = await supabase.from("moments").insert(usernameOnlyPayload);
-          if (!error) return NextResponse.json({ ok: true }, { status: 200 });
-        } else if (!missingUserId && missingUsername) {
-          const { error } = await supabase.from("moments").insert(userIdOnlyPayload);
-          if (!error) return NextResponse.json({ ok: true }, { status: 200 });
-        }
-        const { error: baseErr } = await supabase.from("moments").insert(basePayload);
-        if (baseErr) return NextResponse.json({ ok: false, code: "insert_failed", message: baseErr.message }, { status: 500 });
-      } else return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ ok: true }, { status: 200 });
+    return NextResponse.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
   } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return NextResponse.json({ ok: false, code: "server_error", message }, { status: 500 });
   }
