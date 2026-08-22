@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+set -eu
+
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+GRADLE_VERSION=8.11.1
+GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
+DIST_DIR="$GRADLE_USER_HOME/zohor-wrapper"
+GRADLE_HOME="$DIST_DIR/gradle-$GRADLE_VERSION"
+DIST_ZIP="$DIST_DIR/gradle-$GRADLE_VERSION-bin.zip"
+DIST_URL="https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-bin.zip"
+
+if [ ! -x "$GRADLE_HOME/bin/gradle" ]; then
+  mkdir -p "$DIST_DIR"
+  if [ ! -f "$DIST_ZIP" ]; then
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL "$DIST_URL" -o "$DIST_ZIP"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -q "$DIST_URL" -O "$DIST_ZIP"
+    else
+      echo "Neither curl nor wget is available to download Gradle." >&2
+      exit 1
+    fi
+  fi
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$DIST_ZIP" -d "$DIST_DIR"
+  else
+    echo "unzip is required to extract Gradle." >&2
+    exit 1
+  fi
+fi
+
+exec "$GRADLE_HOME/bin/gradle" -p "$APP_HOME" "$@"
