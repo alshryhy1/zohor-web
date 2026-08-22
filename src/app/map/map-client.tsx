@@ -168,6 +168,32 @@ function asObj(v: unknown) {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
 }
 
+function toMapPost(row: unknown): MapPost | null {
+  const obj = asObj(row);
+  if (!obj) return null;
+  const id = String(obj["id"] || "").trim();
+  const mediaUrl = String(obj["media_url"] || "").trim();
+  const lat = Number(obj["lat"]);
+  const lng = Number(obj["lng"]);
+  const expiresAt = String(obj["expires_at"] || "").trim();
+  const username = String(obj["username"] || "").trim();
+  const createdAt = String(obj["created_at"] || "").trim();
+  if (!id || !mediaUrl || !Number.isFinite(lat) || !Number.isFinite(lng) || !expiresAt) return null;
+  return { id, mediaUrl, lat, lng, expiresAt, username, createdAt };
+}
+
+function mergePosts(primary: MapPost[], secondary: MapPost[]) {
+  const out: MapPost[] = [];
+  const seen = new Set<string>();
+  for (const p of [...primary, ...secondary]) {
+    const id = String(p?.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(p);
+  }
+  return out;
+}
+
 function emailToUsername(email: string) {
   const e = String(email || "").trim();
   if (!e.includes("@")) return e;
@@ -392,6 +418,48 @@ export default function MapClient({
   React.useEffect(() => {
     postsRef.current = posts;
   }, [posts]);
+
+  const refreshPosts = React.useCallback(
+    async (preferredPost?: MapPost) => {
+      if (!supabase) return false;
+      try {
+        const nowIso = new Date().toISOString();
+        const { data, error } = await supabase
+          .from("map_posts")
+          .select("id,media_url,lat,lng,expires_at,username,created_at")
+          .gt("expires_at", nowIso)
+          .order("created_at", { ascending: false })
+          .limit(400);
+        if (error) throw error;
+
+        const remotePosts = (Array.isArray(data) ? data : [])
+          .map((row) => toMapPost(row))
+          .filter(Boolean) as MapPost[];
+        const nextPosts = preferredPost ? mergePosts([preferredPost], remotePosts) : remotePosts;
+        setPosts(nextPosts);
+        if (preferredPost) {
+          setSelected(nextPosts.find((p) => p.id === preferredPost.id) || preferredPost);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [supabase]
+  );
+
+  React.useEffect(() => {
+    void refreshPosts();
+  }, [refreshPosts]);
+
+  React.useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshPosts();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, [refreshPosts]);
 
   React.useEffect(() => {
     if (!toast) return;
@@ -695,9 +763,11 @@ export default function MapClient({
       const p: MapPost = { id, mediaUrl: media, lat: rLat, lng: rLng, expiresAt: exp, username: u, createdAt };
       setPosts((prev) => [p, ...prev]);
       setSelected(p);
+      mapRef.current?.easeTo({ center: [rLng, rLat], zoom: Math.max(mapRef.current.getZoom(), 16), duration: 900 });
       setUploadFile(null);
       setUploadOpen(false);
       setToast("تم النشر");
+      void refreshPosts(p);
     } catch (e: unknown) {
       setUploadMsg(normalizePublishError(e));
     } finally {
