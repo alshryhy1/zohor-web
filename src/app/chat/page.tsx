@@ -409,8 +409,8 @@ export default function ChatPage() {
           }
           .chatMessages { margin-top: 10px; flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 2px; }
           .chatRow { display: flex; }
-          .chatRowMine { justify-content: flex-end; }
-          .chatRowOther { justify-content: flex-start; }
+          .chatRowMine { justify-content: flex-start; }
+          .chatRowOther { justify-content: flex-end; }
           .chatBubble {
             max-width: 78%;
             border-radius: 18px;
