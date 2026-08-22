@@ -16,46 +16,50 @@ actor ZohorAPIClient {
     }
 
     func profile() async throws -> Profile {
-        try await request(path: "/api/profile", method: "GET")
+        let data = try await requestData(path: "/api/profile", method: "GET")
+        return try JSONDecoder.zohor.decode(Profile.self, from: data)
     }
 
     func updateProfile(phone: String, username: String? = nil) async throws {
         struct Body: Encodable { let phone: String; let username: String? }
-        let _: EmptyResponse = try await request(path: "/api/profile", method: "POST", body: Body(phone: phone, username: username))
+        _ = try await requestData(path: "/api/profile", method: "POST", body: Body(phone: phone, username: username))
     }
 
     func startDirect(phone: String) async throws -> String {
         struct Body: Encodable { let action = "start_direct"; let phone: String }
         struct Response: Decodable { let conversationId: String }
-        let response: Response = try await request(path: "/api/chat", method: "POST", body: Body(phone: phone))
+        let data = try await requestData(path: "/api/chat", method: "POST", body: Body(phone: phone))
+        let response = try JSONDecoder.zohor.decode(Response.self, from: data)
         return response.conversationId
     }
 
     func listConversations() async throws -> [Conversation] {
         struct Body: Encodable { let action = "list_conversations" }
         struct Response: Decodable { let conversations: [Conversation] }
-        let response: Response = try await request(path: "/api/chat", method: "POST", body: Body())
+        let data = try await requestData(path: "/api/chat", method: "POST", body: Body())
+        let response = try JSONDecoder.zohor.decode(Response.self, from: data)
         return response.conversations
     }
 
     func messages(conversationId: String) async throws -> [ChatMessage] {
         struct Body: Encodable { let action = "get_messages"; let conversationId: String }
         struct Response: Decodable { let messages: [ChatMessage] }
-        let response: Response = try await request(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId))
+        let data = try await requestData(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId))
+        let response = try JSONDecoder.zohor.decode(Response.self, from: data)
         return response.messages
     }
 
     func sendMessage(conversationId: String, text: String) async throws {
         struct Body: Encodable { let action = "send_message"; let conversationId: String; let text: String }
-        let _: EmptyResponse = try await request(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId, text: text))
+        _ = try await requestData(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId, text: text))
     }
 
-    private func request<Response: Decodable>(path: String, method: String) async throws -> Response {
+    private func requestData(path: String, method: String) async throws -> Data {
         let empty: EmptyRequest? = nil
-        return try await request(path: path, method: method, body: empty)
+        return try await requestData(path: path, method: method, body: empty)
     }
 
-    private func request<Response: Decodable, Body: Encodable>(path: String, method: String, body: Body?) async throws -> Response {
+    private func requestData<Body: Encodable>(path: String, method: String, body: Body?) async throws -> Data {
         guard let session = await sessionProvider() else { throw ZohorAPIError.missingSession }
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
@@ -75,13 +79,11 @@ actor ZohorAPIClient {
                 status: http.statusCode
             )
         }
-        if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
-        return try JSONDecoder.zohor.decode(Response.self, from: data)
+        return data
     }
 }
 
 private struct EmptyRequest: Encodable {}
-private struct EmptyResponse: Decodable { init() {} }
 private struct APIErrorPayload: Decodable { let code: String?; let message: String? }
 
 private extension JSONDecoder {
