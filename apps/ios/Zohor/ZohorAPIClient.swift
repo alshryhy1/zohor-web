@@ -85,21 +85,3 @@ actor ZohorAPIClient {
 
 private struct EmptyRequest: Encodable {}
 private struct APIErrorPayload: Decodable { let code: String?; let message: String? }
-
-private extension JSONDecoder {
-    static var zohor: JSONDecoder {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        decoder.dateDecodingStrategy = .iso8601
-        return decoder
-    }
-}
-
-private extension JSONEncoder {
-    static var zohor: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        encoder.dateEncodingStrategy = .iso8601
-        return encoder
-    }
-}

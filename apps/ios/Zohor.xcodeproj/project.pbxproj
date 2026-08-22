@@ -12,6 +12,10 @@
 		A10000000000000000000003 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* Models.swift */; };
 		A10000000000000000000004 /* ZohorAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* ZohorAPIClient.swift */; };
 		A10000000000000000000005 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* RootView.swift */; };
+		A10000000000000000000006 /* ZohorConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* ZohorConfig.swift */; };
+		A10000000000000000000007 /* SupabaseAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* SupabaseAuthClient.swift */; };
+		A10000000000000000000008 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SessionStore.swift */; };
+		A10000000000000000000009 /* JSONCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* JSONCoding.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +25,10 @@
 		A20000000000000000000004 /* ZohorAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZohorAPIClient.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* Zohor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Zohor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000007 /* ZohorConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZohorConfig.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* SupabaseAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseAuthClient.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* JSONCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONCoding.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,6 +57,10 @@
 				A20000000000000000000002 /* AppState.swift */,
 				A20000000000000000000003 /* Models.swift */,
 				A20000000000000000000004 /* ZohorAPIClient.swift */,
+				A20000000000000000000007 /* ZohorConfig.swift */,
+				A20000000000000000000008 /* SupabaseAuthClient.swift */,
+				A20000000000000000000009 /* SessionStore.swift */,
+				A20000000000000000000010 /* JSONCoding.swift */,
 				A20000000000000000000005 /* RootView.swift */,
 			);
 			path = Zohor;
@@ -135,6 +147,10 @@
 				A10000000000000000000002 /* AppState.swift in Sources */,
 				A10000000000000000000003 /* Models.swift in Sources */,
 				A10000000000000000000004 /* ZohorAPIClient.swift in Sources */,
+				A10000000000000000000006 /* ZohorConfig.swift in Sources */,
+				A10000000000000000000007 /* SupabaseAuthClient.swift in Sources */,
+				A10000000000000000000008 /* SessionStore.swift in Sources */,
+				A10000000000000000000009 /* JSONCoding.swift in Sources */,
 				A10000000000000000000005 /* RootView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

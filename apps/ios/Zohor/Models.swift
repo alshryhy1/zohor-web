@@ -1,9 +1,10 @@
 import Foundation
 
-struct UserSession: Equatable {
+struct UserSession: Codable, Equatable {
     let userId: String
     let email: String
     let accessToken: String
+    let refreshToken: String
     let emailVerified: Bool
 }
 
