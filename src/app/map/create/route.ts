@@ -245,6 +245,10 @@ function clampCoord(raw: unknown) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function isValidLatLng(lat: number, lng: number) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
 export async function POST(req: Request) {
   try {
     const form = await req.formData();
@@ -263,7 +267,7 @@ export async function POST(req: Request) {
     if (!ALLOWED_MEDIA_TYPES.has(contentType)) {
       return NextResponse.json({ ok: false, code: "bad_file", message: "file must be an image or video" }, { status: 400 });
     }
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    if (!isValidLatLng(lat, lng)) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "lat/lng required" }, { status: 400 });
     }
 

@@ -36,6 +36,21 @@ function buildSupabaseAdmin() {
   return createClient(url, service);
 }
 
+function parseStorageObject(publicUrl: string) {
+  const raw = String(publicUrl || "").trim();
+  if (!raw) return null;
+  const url = raw.split("?")[0] || raw;
+  const marker = "/storage/v1/object/public/";
+  const idx = url.indexOf(marker);
+  if (idx < 0) return null;
+  const rest = url.slice(idx + marker.length);
+  const parts = rest.split("/").filter(Boolean);
+  const bucket = parts[0] || "";
+  const objectPath = parts.slice(1).join("/");
+  if (!bucket || !objectPath) return null;
+  return { bucket, objectPath };
+}
+
 function isMissingColumnError(message: string, column: string) {
   const msg = String(message || "");
   const low = msg.toLowerCase();
@@ -64,6 +79,10 @@ export async function POST(req: Request) {
 
     if (!mediaUrl) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "mediaUrl مطلوب." }, { status: 400 });
+    }
+    const storageObject = parseStorageObject(mediaUrl);
+    if (!storageObject || storageObject.bucket !== "moments-media") {
+      return NextResponse.json({ ok: false, code: "bad_request", message: "mediaUrl يجب أن يكون من moments-media." }, { status: 400 });
     }
 
     const meId = userId(user);

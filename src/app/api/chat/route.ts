@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-import { authErrorResponse, getAuthenticatedUser, userId } from "@/lib/supabase/auth";
+import { authErrorResponse, bearerTokenFromRequest, getAuthenticatedUser, userId } from "@/lib/supabase/auth";
 import { type NextRequest } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -269,7 +269,7 @@ export async function POST(req: NextRequest) {
     const isProd = process.env.NODE_ENV === "production";
     const localMode = isLocalMode();
 
-    if (localMode) {
+    if (localMode && !bearerTokenFromRequest(req)) {
       if (!local) return Response.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
 
       if (action === "resolve_phone") {
