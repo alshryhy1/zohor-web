@@ -18,7 +18,7 @@
 --   authenticated users can read app content; BFF/service-role can still serve web as needed.
 -- - Full Host/Room entitlement is not designed yet. No live_rooms table is created here.
 -- - Moments likes/comments are currently local client state, not proven as DB-backed.
--- - Map views are currently local client state, not proven as DB-backed.
+-- - Map likes/comments and views are outside Native V1 until direct RLS is proven.
 -- - APNs/FCM device token tables are not present in current code.
 
 begin;
@@ -71,23 +71,9 @@ for select
 to authenticated
 using (id = auth.uid());
 
-drop policy if exists "profiles_insert_self" on public.profiles;
-create policy "profiles_insert_self"
-on public.profiles
-for insert
-to authenticated
-with check (id = auth.uid());
-
-drop policy if exists "profiles_update_self" on public.profiles;
-create policy "profiles_update_self"
-on public.profiles
-for update
-to authenticated
-using (id = auth.uid())
-with check (id = auth.uid());
-
 -- Phone lookup by other users is intentionally not allowed directly here.
 -- The current Chat API resolves phone numbers through the BFF/service role.
+-- Profile writes are performed through /api/profile in the BFF.
 
 -- ---------------------------------------------------------------------
 -- moments
@@ -119,27 +105,10 @@ for select
 to authenticated
 using (true);
 
-drop policy if exists "moments_insert_self" on public.moments;
-create policy "moments_insert_self"
-on public.moments
-for insert
-to authenticated
-with check (user_id = auth.uid());
-
-drop policy if exists "moments_update_self" on public.moments;
-create policy "moments_update_self"
-on public.moments
-for update
-to authenticated
-using (user_id = auth.uid())
-with check (user_id = auth.uid());
-
-drop policy if exists "moments_delete_self" on public.moments;
-create policy "moments_delete_self"
-on public.moments
-for delete
-to authenticated
-using (user_id = auth.uid());
+-- Moments writes/deletes are performed through BFF routes:
+-- - POST /moments/upload
+-- - POST /moments/create
+-- - POST /moments/delete
 
 -- ---------------------------------------------------------------------
 -- follows
@@ -165,19 +134,7 @@ for select
 to authenticated
 using (follower_id = auth.uid() or following_id = auth.uid());
 
-drop policy if exists "follows_insert_self" on public.follows;
-create policy "follows_insert_self"
-on public.follows
-for insert
-to authenticated
-with check (follower_id = auth.uid() and following_id <> auth.uid());
-
-drop policy if exists "follows_delete_self" on public.follows;
-create policy "follows_delete_self"
-on public.follows
-for delete
-to authenticated
-using (follower_id = auth.uid());
+-- Follow writes are performed through POST /follow/toggle in the BFF.
 
 -- ---------------------------------------------------------------------
 -- map_posts
@@ -216,19 +173,7 @@ for select
 to authenticated
 using (expires_at > now());
 
-drop policy if exists "map_posts_insert_self" on public.map_posts;
-create policy "map_posts_insert_self"
-on public.map_posts
-for insert
-to authenticated
-with check (user_id = auth.uid() and expires_at > now());
-
-drop policy if exists "map_posts_delete_self" on public.map_posts;
-create policy "map_posts_delete_self"
-on public.map_posts
-for delete
-to authenticated
-using (user_id = auth.uid());
+-- Map post writes are performed through POST /map/create in the BFF.
 
 -- ---------------------------------------------------------------------
 -- map_post_likes
@@ -246,34 +191,9 @@ create index if not exists map_post_likes_user_id_idx
 
 alter table public.map_post_likes enable row level security;
 
-drop policy if exists "map_post_likes_select_authenticated" on public.map_post_likes;
-create policy "map_post_likes_select_authenticated"
-on public.map_post_likes
-for select
-to authenticated
-using (true);
-
-drop policy if exists "map_post_likes_insert_self" on public.map_post_likes;
-create policy "map_post_likes_insert_self"
-on public.map_post_likes
-for insert
-to authenticated
-with check (
-  user_id = auth.uid()
-  and exists (
-    select 1
-    from public.map_posts p
-    where p.id = map_post_likes.post_id
-      and p.expires_at > now()
-  )
-);
-
-drop policy if exists "map_post_likes_delete_self" on public.map_post_likes;
-create policy "map_post_likes_delete_self"
-on public.map_post_likes
-for delete
-to authenticated
-using (user_id = auth.uid());
+-- No direct RLS policies for map_post_likes in Native V1.
+-- The current web client falls back to local state if remote access is unavailable.
+-- Add explicit BFF/API contract before enabling these policies.
 
 -- ---------------------------------------------------------------------
 -- map_post_comments
@@ -298,34 +218,9 @@ create index if not exists map_post_comments_user_id_idx
 
 alter table public.map_post_comments enable row level security;
 
-drop policy if exists "map_post_comments_select_authenticated" on public.map_post_comments;
-create policy "map_post_comments_select_authenticated"
-on public.map_post_comments
-for select
-to authenticated
-using (true);
-
-drop policy if exists "map_post_comments_insert_self" on public.map_post_comments;
-create policy "map_post_comments_insert_self"
-on public.map_post_comments
-for insert
-to authenticated
-with check (
-  user_id = auth.uid()
-  and exists (
-    select 1
-    from public.map_posts p
-    where p.id = map_post_comments.post_id
-      and p.expires_at > now()
-  )
-);
-
-drop policy if exists "map_post_comments_delete_self" on public.map_post_comments;
-create policy "map_post_comments_delete_self"
-on public.map_post_comments
-for delete
-to authenticated
-using (user_id = auth.uid());
+-- No direct RLS policies for map_post_comments in Native V1.
+-- The current web client falls back to local state if remote access is unavailable.
+-- Add explicit BFF/API contract before enabling these policies.
 
 -- ---------------------------------------------------------------------
 -- chat
@@ -409,20 +304,8 @@ using (
   )
 );
 
-drop policy if exists "messages_insert_for_members" on public.messages;
-create policy "messages_insert_for_members"
-on public.messages
-for insert
-to authenticated
-with check (
-  sender_id = auth.uid()
-  and exists (
-    select 1
-    from public.conversation_members cm
-    where cm.conversation_id = messages.conversation_id
-      and cm.user_id = auth.uid()
-  )
-);
+-- Message writes are performed through POST /api/chat in the BFF.
+-- Do not add direct INSERT policy for Native V1.
 
 -- ---------------------------------------------------------------------
 -- Storage
@@ -478,24 +361,12 @@ begin
 end;
 $$;
 
--- Supabase Realtime Broadcast authorization.
--- UNKNOWN: This depends on the Supabase project's Realtime Authorization feature/version.
--- Review in Supabase before running. The app uses topics: live:{channel}.
-alter table realtime.messages enable row level security;
-
-drop policy if exists "realtime_live_select_authenticated" on realtime.messages;
-create policy "realtime_live_select_authenticated"
-on realtime.messages
-for select
-to authenticated
-using (topic like 'live:%');
-
-drop policy if exists "realtime_live_insert_authenticated" on realtime.messages;
-create policy "realtime_live_insert_authenticated"
-on realtime.messages
-for insert
-to authenticated
-with check (topic like 'live:%');
+-- Supabase Realtime Broadcast authorization for live:{channel}.
+-- UNKNOWN / REQUIRES VERIFICATION:
+-- - The project must require JWT for live:%.
+-- - Exact realtime.messages policies depend on the Supabase project's Realtime
+--   Authorization feature/version.
+-- - Do not create broad live:% policies here until verified against Supabase.
 
 -- ---------------------------------------------------------------------
 -- Auth assumptions
@@ -512,6 +383,6 @@ with check (topic like 'live:%');
 -- requires a valid Bearer JWT or web cookie.
 --
 -- Profile phone uniqueness is enforced in DB and BFF.
--- Chat membership and message sender ownership are enforced in DB policies and BFF.
+-- Chat membership is enforced in DB read policies and BFF write logic.
 
 commit;
