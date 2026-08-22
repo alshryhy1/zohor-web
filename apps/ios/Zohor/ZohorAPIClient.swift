@@ -34,13 +34,15 @@ actor ZohorAPIClient {
     func listConversations() async throws -> [Conversation] {
         struct Body: Encodable { let action = "list_conversations" }
         struct Response: Decodable { let conversations: [Conversation] }
-        return try await request(path: "/api/chat", method: "POST", body: Body()).conversations
+        let response: Response = try await request(path: "/api/chat", method: "POST", body: Body())
+        return response.conversations
     }
 
     func messages(conversationId: String) async throws -> [ChatMessage] {
         struct Body: Encodable { let action = "get_messages"; let conversationId: String }
         struct Response: Decodable { let messages: [ChatMessage] }
-        return try await request(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId)).messages
+        let response: Response = try await request(path: "/api/chat", method: "POST", body: Body(conversationId: conversationId))
+        return response.messages
     }
 
     func sendMessage(conversationId: String, text: String) async throws {
