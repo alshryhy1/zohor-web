@@ -164,14 +164,24 @@ export default function BottomNav() {
   }, []);
 
   const refreshMe = React.useCallback(async () => {
-    if (!supabase) {
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "me" }),
+      });
+      const json = (await res.json().catch(() => null)) as unknown;
+      const obj = asObj(json);
+      if (!res.ok || !obj || obj["ok"] !== true) {
+        setMeId("");
+        return;
+      }
+      const user = asObj(obj["user"]);
+      setMeId(String(user?.["id"] || "").trim());
+    } catch {
       setMeId("");
-      return;
     }
-    const { data } = await supabase.auth.getUser();
-    const id = typeof data?.user?.id === "string" ? data.user.id : "";
-    setMeId(id);
-  }, [supabase]);
+  }, []);
 
   const refreshConversationSubscriptions = React.useCallback(async () => {
     if (notifPermission !== "granted") return;
