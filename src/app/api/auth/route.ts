@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { createServerClient } from "@supabase/ssr";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -23,6 +24,83 @@ function normalizeKey(raw: string) {
   let s = String(raw || "").trim();
   if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
   return s;
+}
+
+function buildSupabaseAdmin() {
+  const url = normalizeSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
+  const service = normalizeKey(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+  if (!url || !service) return null;
+  return createClient(url, service);
+}
+
+function isMissingColumnError(message: string, column: string) {
+  const msg = String(message || "").toLowerCase();
+  const col = String(column || "").toLowerCase();
+  return (
+    (msg.includes("does not exist") && msg.includes(col)) ||
+    (msg.includes("could not find") && msg.includes("schema cache") && msg.includes(col))
+  );
+}
+
+async function sourceSignUp(input: { email: string; password: string; name: string; username: string }) {
+  const admin = buildSupabaseAdmin();
+  if (!admin) return null;
+
+  const email = normalizeEmail(input.email);
+  const username = String(input.username || "").trim();
+  const name = String(input.name || "").trim();
+  if (!email || !input.password || !username) {
+    return { status: 400, body: { ok: false, code: "bad_request", message: "البريد واسم المستخدم وكلمة المرور مطلوبة." } };
+  }
+
+  const { data: names, error: nameErr } = await admin.from("profiles").select("username");
+  if (!nameErr) {
+    const wanted = username.toLowerCase();
+    const taken = (names || []).some((row) => String((row as { username?: unknown }).username || "").trim().toLowerCase() === wanted);
+    if (taken) {
+      return { status: 409, body: { ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." } };
+    }
+  }
+
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password: input.password,
+    email_confirm: true,
+    user_metadata: { name, full_name: name, username },
+  });
+  if (error) {
+    const msg = String(error.message || "");
+    const low = msg.toLowerCase();
+    if (low.includes("already") || low.includes("registered") || low.includes("exists")) {
+      return { status: 409, body: { ok: false, code: "already_registered", message: "هذا البريد مسجّل مسبقًا." } };
+    }
+    return { status: 400, body: { ok: false, code: "signup_failed", message: msg || "تعذر إنشاء الحساب." } };
+  }
+
+  const user = data.user;
+  const meId = String(user?.id || "").trim();
+  if (meId) {
+    const rich = { id: meId, username, display_name: name || username };
+    let insertError = (await admin.from("profiles").insert(rich)).error;
+    if (insertError && isMissingColumnError(String(insertError.message || ""), "display_name")) {
+      insertError = (await admin.from("profiles").insert({ id: meId, username })).error;
+    }
+    if (insertError) {
+      const low = String(insertError.message || "").toLowerCase();
+      if (low.includes("duplicate") || low.includes("unique")) {
+        return { status: 409, body: { ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." } };
+      }
+    }
+  }
+
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      activated: true,
+      user: user ? { ...userPayload(user), verified: true } : { id: meId, email, verified: true },
+    },
+  };
 }
 
 function userPayload(user: unknown) {
@@ -332,6 +410,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "signup") {
+      const name = String(body?.name || "").trim();
+      const username = String(body?.username || "").trim();
+      if (username) {
+        const source = await sourceSignUp({ email, password, name, username });
+        if (source) return jsonWithCookies(cookieRes, source.body, source.status);
+        return jsonWithCookies(
+          cookieRes,
+          { ok: false, code: "server_misconfig", message: "تعذر تفعيل الحساب من المصدر." },
+          503
+        );
+      }
       if (!supabase) {
         const out = await localSignUp(email, password, cookieRes);
         if (!out.ok) return jsonWithCookies(cookieRes, out, 400);

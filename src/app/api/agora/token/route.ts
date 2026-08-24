@@ -27,7 +27,12 @@ export async function POST(req: Request) {
     }
 
     const isHost = roleRaw === "host";
-    const { user } = await getAuthenticatedUser(req);
+    let user: Awaited<ReturnType<typeof getAuthenticatedUser>>["user"] | null = null;
+    try {
+      user = (await getAuthenticatedUser(req)).user;
+    } catch (e) {
+      if (isHost) throw e;
+    }
 
     if (isHost && !userEmailVerified(user)) {
       return NextResponse.json({ ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." }, { status: 403 });

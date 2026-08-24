@@ -359,11 +359,44 @@ export default function LiveClient() {
     } catch {}
   }, []);
 
+  const announceLiveRoom = React.useCallback(async () => {
+    const res = await fetch("/live/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: "{}",
+    });
+    const json = (await res.json().catch(() => null)) as {
+      ok?: unknown;
+      message?: unknown;
+      room?: { channel?: unknown };
+    } | null;
+    if (!res.ok || !json || !json.ok) {
+      const m = json && typeof json.message === "string" ? String(json.message).trim() : "";
+      throw new Error(m || "تعذر تسجيل البث.");
+    }
+    return sanitizeText(String(json.room?.channel || ""), 32);
+  }, []);
+
+  const closeLiveRoom = React.useCallback(async () => {
+    try {
+      await fetch("/live/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: "{}",
+      });
+    } catch {}
+  }, []);
+
   const leave = React.useCallback(async (finalToast?: string) => {
     setBusy(true);
     try {
       const wasHost = joinInfoRef.current?.role === "host";
-      if (wasHost) await untrackLobbyHost();
+      if (wasHost) {
+        await untrackLobbyHost();
+        await closeLiveRoom();
+      }
       clearRealtimeRetry();
       realtimeAttemptRef.current = 0;
       try {
@@ -401,7 +434,7 @@ export default function LiveClient() {
     } finally {
       setBusy(false);
     }
-  }, [clearRealtimeRetry, stopLocalRealtime, stopTracks, supabase, untrackLobbyHost]);
+  }, [clearRealtimeRetry, closeLiveRoom, stopLocalRealtime, stopTracks, supabase, untrackLobbyHost]);
 
   React.useEffect(() => {
     return () => {
@@ -825,8 +858,8 @@ export default function LiveClient() {
 
   const join = React.useCallback(async (nextRole: Role = role, nextChannel?: string) => {
     const activeRole = nextRole;
-    const ch = sanitizeText(String(nextChannel || channel || "").trim(), 32);
-    if (!ch) {
+    let ch = sanitizeText(String(nextChannel || channel || "").trim(), 32);
+    if (!ch && activeRole !== "host") {
       setToast("اكتب اسم القناة");
       return;
     }
@@ -840,7 +873,16 @@ export default function LiveClient() {
     }
     setBusy(true);
     setToast("");
+    let roomOpened = false;
     try {
+      if (activeRole === "host") {
+        const roomChannel = await announceLiveRoom();
+        roomOpened = true;
+        if (roomChannel) ch = roomChannel;
+      }
+      if (!ch) {
+        throw new Error("اكتب اسم القناة");
+      }
       if (!rtcRef.current) {
         const mod = (await import("agora-rtc-sdk-ng")) as unknown as { default: AgoraRTCDefault };
         rtcRef.current = mod.default;
@@ -955,11 +997,12 @@ export default function LiveClient() {
       }
     } catch (e: unknown) {
       const msg = normalizeAgoraJoinError(e);
+      if (roomOpened) await closeLiveRoom();
       await leave(msg);
     } finally {
       setBusy(false);
     }
-  }, [agoraAppId, channel, fetchAgoraToken, leave, playRemote, role, startRealtime, trackLobbyHost]);
+  }, [agoraAppId, announceLiveRoom, channel, fetchAgoraToken, leave, playRemote, role, startRealtime, trackLobbyHost]);
 
   const localScore = scores[localUid] || 0;
   const remoteScore = primaryRemote ? scores[String(primaryRemote.uid)] || 0 : 0;

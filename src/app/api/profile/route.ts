@@ -12,6 +12,11 @@ type UserLike = {
   user_metadata?: Record<string, unknown>;
 };
 
+function metaString(user: unknown, key: string) {
+  const meta = ((user as UserLike | null)?.user_metadata || {}) as Record<string, unknown>;
+  return String(meta[key] || "").trim();
+}
+
 function normalizeSupabaseUrl(raw: string) {
   let s = String(raw || "").trim();
   if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
@@ -31,6 +36,19 @@ function buildSupabaseAdmin() {
   const service = normalizeKey(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
   if (!url || !service) return null;
   return createClient(url, service);
+}
+
+function deriveDisplayName(user: unknown) {
+  const u = user as UserLike | null;
+  const meta = (u?.user_metadata || {}) as Record<string, unknown>;
+  const name = String(meta["name"] || meta["full_name"] || "").trim();
+  return name;
+}
+
+function deriveAvatarUrl(user: unknown) {
+  const u = user as UserLike | null;
+  const meta = (u?.user_metadata || {}) as Record<string, unknown>;
+  return String(meta["avatar_url"] || meta["avatarUrl"] || "").trim();
 }
 
 function deriveUsername(user: unknown) {
@@ -214,7 +232,10 @@ async function getBearerProfile(req: NextRequest) {
       return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
     }
 
-    const { data, error } = await admin.from("profiles").select("id,username,phone").eq("id", meId).maybeSingle();
+    let { data, error } = await admin.from("profiles").select("id,username,phone,display_name,avatar_url").eq("id", meId).maybeSingle();
+    if (error && (isMissingColumnError(String(error.message || ""), "display_name") || isMissingColumnError(String(error.message || ""), "avatar_url"))) {
+      ({ data, error } = await admin.from("profiles").select("id,username,phone").eq("id", meId).maybeSingle());
+    }
     if (error) {
       const msg = String(error.message || "");
       if (isMissingColumnError(msg, "phone")) {
@@ -224,8 +245,10 @@ async function getBearerProfile(req: NextRequest) {
     }
 
     const phone = normalizePhone(String((data as { phone?: unknown } | null)?.phone || ""));
-    const username = String((data as { username?: unknown } | null)?.username || "").trim() || deriveUsername(user);
-    return Response.json({ ok: true, profile: { id: meId, username, phone } }, { status: 200 });
+    const username = String((data as { username?: unknown } | null)?.username || "").trim() || metaString(user, "username") || deriveUsername(user);
+    const displayName = String((data as { display_name?: unknown } | null)?.display_name || "").trim() || deriveDisplayName(user);
+    const avatarUrl = String((data as { avatar_url?: unknown } | null)?.avatar_url || "").trim() || deriveAvatarUrl(user);
+    return Response.json({ ok: true, profile: { id: meId, username, phone, displayName: displayName || null, avatarUrl: avatarUrl || null } }, { status: 200 });
   } catch (e: unknown) {
     const authRes = authErrorResponse(e);
     if (authRes) return authRes;
@@ -240,19 +263,28 @@ async function postBearerProfile(req: NextRequest) {
     const meId = userId(user);
     if (!meId) return Response.json({ ok: false, code: "unauthorized", message: "تعذر تحديد المستخدم." }, { status: 401 });
 
-    const body = (await req.json().catch(() => null)) as { phone?: unknown; username?: unknown } | null;
+    const body = (await req.json().catch(() => null)) as {
+      phone?: unknown;
+      username?: unknown;
+      displayName?: unknown;
+      avatarUrl?: unknown;
+    } | null;
     const phone = normalizePhone(String(body?.phone || ""));
     const requestedUsername = String(body?.username || "").trim();
-    if (!phone) return Response.json({ ok: false, code: "bad_request", message: "رقم الجوال مطلوب." }, { status: 400 });
+    const displayName = String(body?.displayName || "").trim();
+    const avatarUrl = String(body?.avatarUrl || "").trim();
+    if (!phone && !requestedUsername) return Response.json({ ok: false, code: "bad_request", message: "اسم المستخدم مطلوب." }, { status: 400 });
 
     const admin = buildSupabaseAdmin();
     if (!admin) {
       return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
     }
 
-    const { data: taken } = await admin.from("profiles").select("id").eq("phone", phone).neq("id", meId).limit(1);
-    if (Array.isArray(taken) && taken.length > 0) {
-      return Response.json({ ok: false, code: "phone_taken", message: "رقم الجوال مستخدم." }, { status: 409 });
+    if (phone) {
+      const { data: taken } = await admin.from("profiles").select("id").eq("phone", phone).neq("id", meId).limit(1);
+      if (Array.isArray(taken) && taken.length > 0) {
+        return Response.json({ ok: false, code: "phone_taken", message: "رقم الجوال مستخدم." }, { status: 409 });
+      }
     }
 
     const { data: meProfile, error: meErr } = await admin.from("profiles").select("id,username").eq("id", meId).maybeSingle();
@@ -265,19 +297,43 @@ async function postBearerProfile(req: NextRequest) {
     }
 
     const username = requestedUsername || String((meProfile as { username?: unknown } | null)?.username || "").trim() || deriveUsername(user);
-    const error = meProfile
-      ? (await admin.from("profiles").update({ phone, username }).eq("id", meId)).error
-      : (await admin.from("profiles").insert({ id: meId, phone, username })).error;
+    if (username) {
+      const { data: takenName } = await admin.from("profiles").select("id,username").neq("id", meId);
+      const wanted = username.toLowerCase();
+      const nameTaken = (takenName || []).some((row) => String((row as { username?: unknown }).username || "").trim().toLowerCase() === wanted);
+      if (nameTaken) {
+        return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
+      }
+    }
+
+    const payload: Record<string, unknown> = { username };
+    if (phone) payload.phone = phone;
+    if (displayName) payload.display_name = displayName;
+    if (avatarUrl) payload.avatar_url = avatarUrl;
+
+    let error = meProfile
+      ? (await admin.from("profiles").update(payload).eq("id", meId)).error
+      : (await admin.from("profiles").insert({ id: meId, ...payload })).error;
+    if (error && (isMissingColumnError(String(error.message || ""), "display_name") || isMissingColumnError(String(error.message || ""), "avatar_url"))) {
+      const slim: Record<string, unknown> = { username };
+      if (phone) slim.phone = phone;
+      error = meProfile
+        ? (await admin.from("profiles").update(slim).eq("id", meId)).error
+        : (await admin.from("profiles").insert({ id: meId, ...slim })).error;
+    }
 
     if (error) {
       const msg = String(error.message || "");
       if (isMissingColumnError(msg, "phone")) {
         return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
       }
+      if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
+        return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
+      }
       return Response.json({ ok: false, code: "update_failed", message: error.message }, { status: 500 });
     }
 
-    return Response.json({ ok: true, phone, username }, { status: 200 });
+    return Response.json({ ok: true, phone, username, displayName, avatarUrl }, { status: 200 });
   } catch (e: unknown) {
     const authRes = authErrorResponse(e);
     if (authRes) return authRes;

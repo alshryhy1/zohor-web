@@ -16,7 +16,7 @@
 -- UNKNOWN:
 -- - Whether unauthenticated visitors should read moments/map posts. This draft is conservative:
 --   authenticated users can read app content; BFF/service-role can still serve web as needed.
--- - Full Host/Room entitlement is not designed yet. No live_rooms table is created here.
+-- - Live V1 is a single host room per user in live_rooms. Agora Native comes later.
 -- - Moments likes/comments are currently local client state, not proven as DB-backed.
 -- - Map likes/comments and views are outside Native V1 until direct RLS is proven.
 -- - APNs/FCM device token tables are not present in current code.
@@ -57,6 +57,16 @@ create index if not exists profiles_username_idx
   on public.profiles (username)
   where username is not null and length(trim(username)) > 0;
 
+alter table public.profiles
+  add column if not exists display_name text;
+
+alter table public.profiles
+  add column if not exists avatar_url text;
+
+create unique index if not exists profiles_username_unique_idx
+  on public.profiles (lower(trim(username)))
+  where username is not null and length(trim(username)) > 0;
+
 drop trigger if exists profiles_set_updated_at on public.profiles;
 create trigger profiles_set_updated_at
 before update on public.profiles
@@ -71,9 +81,38 @@ for select
 to authenticated
 using (id = auth.uid());
 
--- Phone lookup by other users is intentionally not allowed directly here.
--- The current Chat API resolves phone numbers through the BFF/service role.
--- Profile writes are performed through /api/profile in the BFF.
+drop policy if exists "profiles_insert_own" on public.profiles;
+create policy "profiles_insert_own"
+on public.profiles
+for insert
+to authenticated
+with check (id = auth.uid());
+
+drop policy if exists "profiles_update_own" on public.profiles;
+create policy "profiles_update_own"
+on public.profiles
+for update
+to authenticated
+using (id = auth.uid())
+with check (id = auth.uid());
+
+create or replace function public.is_username_taken(requested text)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where username is not null
+      and lower(trim(username)) = lower(trim(requested))
+  );
+$$;
+
+revoke all on function public.is_username_taken(text) from public;
+grant execute on function public.is_username_taken(text) to anon, authenticated;
 
 -- ---------------------------------------------------------------------
 -- moments
@@ -86,9 +125,16 @@ create table if not exists public.moments (
   media_url text not null,
   user_id uuid not null references auth.users(id) on delete cascade,
   username text,
+  views integer not null default 0,
   created_at timestamptz not null default now(),
   constraint moments_media_url_not_blank check (length(trim(media_url)) > 0)
 );
+
+alter table public.moments
+  add column if not exists views integer not null default 0;
+
+alter table public.moments
+  add column if not exists likes integer not null default 0;
 
 create index if not exists moments_created_at_idx
   on public.moments (created_at desc);
@@ -105,10 +151,209 @@ for select
 to authenticated
 using (true);
 
--- Moments writes/deletes are performed through BFF routes:
--- - POST /moments/upload
--- - POST /moments/create
--- - POST /moments/delete
+drop policy if exists "moments_insert_own" on public.moments;
+create policy "moments_insert_own"
+on public.moments
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+drop policy if exists "moments_delete_own" on public.moments;
+create policy "moments_delete_own"
+on public.moments
+for delete
+to authenticated
+using (user_id = auth.uid());
+
+create table if not exists public.moment_views (
+  moment_id uuid not null references public.moments(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (moment_id, user_id)
+);
+
+create index if not exists moment_views_user_id_idx
+  on public.moment_views (user_id);
+
+alter table public.moment_views enable row level security;
+
+drop policy if exists "moment_views_select_authenticated" on public.moment_views;
+create policy "moment_views_select_authenticated"
+on public.moment_views
+for select
+to authenticated
+using (true);
+
+drop function if exists public.increment_moment_views(uuid);
+
+create or replace function public.record_moment_view(moment_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  viewer uuid;
+  owner uuid;
+  total integer;
+begin
+  viewer := auth.uid();
+  if viewer is null or moment_id is null then
+    select coalesce(views, 0) into total from public.moments where id = moment_id;
+    return coalesce(total, 0);
+  end if;
+
+  select user_id into owner from public.moments where id = moment_id;
+  if owner is null then
+    return 0;
+  end if;
+
+  if owner <> viewer then
+    insert into public.moment_views (moment_id, user_id)
+    values (moment_id, viewer)
+    on conflict do nothing;
+  end if;
+
+  update public.moments m
+  set views = (
+    select count(*) from public.moment_views v
+    where v.moment_id = m.id
+  )
+  where m.id = moment_id;
+
+  select coalesce(views, 0) into total from public.moments where id = moment_id;
+  return coalesce(total, 0);
+end;
+$$;
+
+revoke all on function public.record_moment_view(uuid) from public;
+grant execute on function public.record_moment_view(uuid) to authenticated;
+
+alter table public.moments
+  add column if not exists comments integer not null default 0;
+
+-- ---------------------------------------------------------------------
+-- moment engagement (likes + comments)
+-- ---------------------------------------------------------------------
+
+create table if not exists public.moment_likes (
+  moment_id uuid not null references public.moments(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (moment_id, user_id)
+);
+
+create index if not exists moment_likes_user_id_idx
+  on public.moment_likes (user_id);
+
+alter table public.moment_likes enable row level security;
+
+drop policy if exists "moment_likes_select_authenticated" on public.moment_likes;
+create policy "moment_likes_select_authenticated"
+on public.moment_likes
+for select
+to authenticated
+using (true);
+
+drop policy if exists "moment_likes_insert_own" on public.moment_likes;
+create policy "moment_likes_insert_own"
+on public.moment_likes
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+drop policy if exists "moment_likes_delete_own" on public.moment_likes;
+create policy "moment_likes_delete_own"
+on public.moment_likes
+for delete
+to authenticated
+using (user_id = auth.uid());
+
+create table if not exists public.moment_comments (
+  id uuid primary key default gen_random_uuid(),
+  moment_id uuid not null references public.moments(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  body text not null,
+  created_at timestamptz not null default now(),
+  constraint moment_comments_body_not_blank check (length(trim(body)) > 0)
+);
+
+create index if not exists moment_comments_moment_id_created_at_idx
+  on public.moment_comments (moment_id, created_at desc);
+
+alter table public.moment_comments enable row level security;
+
+drop policy if exists "moment_comments_select_authenticated" on public.moment_comments;
+create policy "moment_comments_select_authenticated"
+on public.moment_comments
+for select
+to authenticated
+using (true);
+
+drop policy if exists "moment_comments_insert_own" on public.moment_comments;
+create policy "moment_comments_insert_own"
+on public.moment_comments
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+drop policy if exists "moment_comments_delete_own" on public.moment_comments;
+create policy "moment_comments_delete_own"
+on public.moment_comments
+for delete
+to authenticated
+using (
+  user_id = auth.uid()
+  or exists (
+    select 1 from public.moments m
+    where m.id = moment_comments.moment_id
+      and m.user_id = auth.uid()
+  )
+);
+
+create or replace function public.sync_moment_like_count()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.moments
+  set likes = (
+    select count(*) from public.moment_likes
+    where moment_id = coalesce(new.moment_id, old.moment_id)
+  )
+  where id = coalesce(new.moment_id, old.moment_id);
+  return null;
+end;
+$$;
+
+drop trigger if exists moment_likes_sync_count on public.moment_likes;
+create trigger moment_likes_sync_count
+after insert or delete on public.moment_likes
+for each row execute function public.sync_moment_like_count();
+
+create or replace function public.sync_moment_comment_count()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.moments
+  set comments = (
+    select count(*) from public.moment_comments
+    where moment_id = coalesce(new.moment_id, old.moment_id)
+  )
+  where id = coalesce(new.moment_id, old.moment_id);
+  return null;
+end;
+$$;
+
+drop trigger if exists moment_comments_sync_count on public.moment_comments;
+create trigger moment_comments_sync_count
+after insert or delete on public.moment_comments
+for each row execute function public.sync_moment_comment_count();
 
 -- ---------------------------------------------------------------------
 -- follows
@@ -134,7 +379,21 @@ for select
 to authenticated
 using (follower_id = auth.uid() or following_id = auth.uid());
 
--- Follow writes are performed through POST /follow/toggle in the BFF.
+drop policy if exists "follows_insert_own" on public.follows;
+create policy "follows_insert_own"
+on public.follows
+for insert
+to authenticated
+with check (follower_id = auth.uid() and follower_id <> following_id);
+
+drop policy if exists "follows_delete_own" on public.follows;
+create policy "follows_delete_own"
+on public.follows
+for delete
+to authenticated
+using (follower_id = auth.uid());
+
+-- Follow writes also go through POST /follow/toggle in the BFF.
 
 -- ---------------------------------------------------------------------
 -- map_posts
@@ -173,7 +432,52 @@ for select
 to authenticated
 using (expires_at > now());
 
+drop policy if exists "map_posts_delete_own" on public.map_posts;
+create policy "map_posts_delete_own"
+on public.map_posts
+for delete
+to authenticated
+using (user_id = auth.uid());
+
 -- Map post writes are performed through POST /map/create in the BFF.
+
+-- ---------------------------------------------------------------------
+-- live_rooms
+-- ---------------------------------------------------------------------
+
+create table if not exists public.live_rooms (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references auth.users(id) on delete cascade,
+  username text,
+  channel text not null unique,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists live_rooms_created_at_idx
+  on public.live_rooms (created_at desc);
+
+alter table public.live_rooms enable row level security;
+
+drop policy if exists "live_rooms_select_authenticated" on public.live_rooms;
+create policy "live_rooms_select_authenticated"
+on public.live_rooms
+for select
+to authenticated
+using (true);
+
+drop policy if exists "live_rooms_insert_own" on public.live_rooms;
+create policy "live_rooms_insert_own"
+on public.live_rooms
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+drop policy if exists "live_rooms_delete_own" on public.live_rooms;
+create policy "live_rooms_delete_own"
+on public.live_rooms
+for delete
+to authenticated
+using (user_id = auth.uid());
 
 -- ---------------------------------------------------------------------
 -- map_post_likes
@@ -340,8 +644,19 @@ for select
 to anon, authenticated
 using (bucket_id = 'moments-media');
 
--- BFF uploads through service role. Direct client upload policies are intentionally
--- not added unless the product decides to allow direct Storage writes.
+drop policy if exists "moments_media_authenticated_insert" on storage.objects;
+create policy "moments_media_authenticated_insert"
+on storage.objects
+for insert
+to authenticated
+with check (bucket_id = 'moments-media');
+
+drop policy if exists "moments_media_authenticated_delete_own" on storage.objects;
+create policy "moments_media_authenticated_delete_own"
+on storage.objects
+for delete
+to authenticated
+using (bucket_id = 'moments-media' and owner = auth.uid());
 
 -- ---------------------------------------------------------------------
 -- Realtime

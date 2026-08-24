@@ -16,6 +16,23 @@
 		A10000000000000000000007 /* SupabaseAuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* SupabaseAuthClient.swift */; };
 		A10000000000000000000008 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SessionStore.swift */; };
 		A10000000000000000000009 /* JSONCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* JSONCoding.swift */; };
+		A10000000000000000000010 /* ZohorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* ZohorTheme.swift */; };
+		A10000000000000000000011 /* AuthField.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* AuthField.swift */; };
+		A10000000000000000000012 /* AuthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* AuthView.swift */; };
+		A10000000000000000000013 /* ScreenPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* ScreenPhase.swift */; };
+		A10000000000000000000014 /* ZohorChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* ZohorChrome.swift */; };
+		A10000000000000000000015 /* MainTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* MainTabBar.swift */; };
+		A10000000000000000000016 /* MainShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* MainShellView.swift */; };
+		A10000000000000000000017 /* MomentsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* MomentsScreen.swift */; };
+		A10000000000000000000018 /* MapScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000020 /* MapScreen.swift */; };
+		A10000000000000000000019 /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000021 /* ChatScreen.swift */; };
+		A10000000000000000000020 /* LiveScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000022 /* LiveScreen.swift */; };
+		A10000000000000000000021 /* ProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000023 /* ProfileScreen.swift */; };
+		A10000000000000000000022 /* LiveAgoraCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000024 /* LiveAgoraCanvas.swift */; };
+		A10000000000000000000023 /* RtcBasic in Frameworks */ = {isa = PBXBuildFile; productRef = A11000000000000000000002 /* RtcBasic */; };
+		A10000000000000000000024 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000025 /* Assets.xcassets */; };
+		A10000000000000000000025 /* LiveGiftShow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000026 /* LiveGiftShow.swift */; };
+		A10000000000000000000026 /* Sounds in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* Sounds */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +46,23 @@
 		A20000000000000000000008 /* SupabaseAuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseAuthClient.swift; sourceTree = "<group>"; };
 		A20000000000000000000009 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* JSONCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONCoding.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* ZohorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZohorTheme.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* AuthField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthField.swift; sourceTree = "<group>"; };
+		A20000000000000000000013 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Config/Debug.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000015 /* ScreenPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenPhase.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* ZohorChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZohorChrome.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* MainTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabBar.swift; sourceTree = "<group>"; };
+		A20000000000000000000018 /* MainShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShellView.swift; sourceTree = "<group>"; };
+		A20000000000000000000019 /* MomentsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MomentsScreen.swift; sourceTree = "<group>"; };
+		A20000000000000000000020 /* MapScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapScreen.swift; sourceTree = "<group>"; };
+		A20000000000000000000021 /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
+		A20000000000000000000022 /* LiveScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveScreen.swift; sourceTree = "<group>"; };
+		A20000000000000000000023 /* ProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileScreen.swift; sourceTree = "<group>"; };
+		A20000000000000000000024 /* LiveAgoraCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAgoraCanvas.swift; sourceTree = "<group>"; };
+		A20000000000000000000025 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000026 /* LiveGiftShow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveGiftShow.swift; sourceTree = "<group>"; };
+		A20000000000000000000027 /* Sounds */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Sounds; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000023 /* RtcBasic in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -46,6 +81,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* Zohor */,
+				A20000000000000000000014 /* Debug.xcconfig */,
 				A40000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,7 +97,23 @@
 				A20000000000000000000008 /* SupabaseAuthClient.swift */,
 				A20000000000000000000009 /* SessionStore.swift */,
 				A20000000000000000000010 /* JSONCoding.swift */,
+				A20000000000000000000011 /* ZohorTheme.swift */,
+				A20000000000000000000012 /* AuthField.swift */,
+				A20000000000000000000013 /* AuthView.swift */,
+				A20000000000000000000015 /* ScreenPhase.swift */,
+				A20000000000000000000016 /* ZohorChrome.swift */,
+				A20000000000000000000017 /* MainTabBar.swift */,
+				A20000000000000000000018 /* MainShellView.swift */,
+				A20000000000000000000019 /* MomentsScreen.swift */,
+				A20000000000000000000020 /* MapScreen.swift */,
+				A20000000000000000000021 /* ChatScreen.swift */,
+				A20000000000000000000022 /* LiveScreen.swift */,
+				A20000000000000000000024 /* LiveAgoraCanvas.swift */,
+				A20000000000000000000026 /* LiveGiftShow.swift */,
+				A20000000000000000000027 /* Sounds */,
+				A20000000000000000000023 /* ProfileScreen.swift */,
 				A20000000000000000000005 /* RootView.swift */,
+				A20000000000000000000025 /* Assets.xcassets */,
 			);
 			path = Zohor;
 			sourceTree = "<group>";
@@ -81,15 +133,20 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A80000000000000000000002 /* Build configuration list for PBXNativeTarget "Zohor" */;
 			buildPhases = (
+				A60000000000000000000003 /* Sync Local Config */,
 				A60000000000000000000001 /* Sources */,
 				A30000000000000000000001 /* Frameworks */,
 				A60000000000000000000002 /* Resources */,
+				A60000000000000000000004 /* Inject Runtime Config */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = Zohor;
+			packageProductDependencies = (
+				A11000000000000000000002 /* RtcBasic */,
+			);
 			productName = Zohor;
 			productReference = A20000000000000000000006 /* Zohor.app */;
 			productType = "com.apple.product-type.application";
@@ -119,6 +176,9 @@
 				Base,
 			);
 			mainGroup = A40000000000000000000001;
+			packageReferences = (
+				A11000000000000000000001 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */,
+			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -128,11 +188,54 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A60000000000000000000003 /* Sync Local Config */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Sync Local Config";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${SRCROOT}/scripts/sync-local-config.py\"\n";
+		};
+		A60000000000000000000004 /* Inject Runtime Config */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Inject Runtime Config";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"${SRCROOT}/scripts/sync-local-config.py\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXResourcesBuildPhase section */
 		A60000000000000000000002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000024 /* Assets.xcassets in Resources */,
+				A10000000000000000000026 /* Sounds in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -151,6 +254,20 @@
 				A10000000000000000000007 /* SupabaseAuthClient.swift in Sources */,
 				A10000000000000000000008 /* SessionStore.swift in Sources */,
 				A10000000000000000000009 /* JSONCoding.swift in Sources */,
+				A10000000000000000000010 /* ZohorTheme.swift in Sources */,
+				A10000000000000000000011 /* AuthField.swift in Sources */,
+				A10000000000000000000012 /* AuthView.swift in Sources */,
+				A10000000000000000000013 /* ScreenPhase.swift in Sources */,
+				A10000000000000000000014 /* ZohorChrome.swift in Sources */,
+				A10000000000000000000015 /* MainTabBar.swift in Sources */,
+				A10000000000000000000016 /* MainShellView.swift in Sources */,
+				A10000000000000000000017 /* MomentsScreen.swift in Sources */,
+				A10000000000000000000018 /* MapScreen.swift in Sources */,
+				A10000000000000000000019 /* ChatScreen.swift in Sources */,
+				A10000000000000000000020 /* LiveScreen.swift in Sources */,
+				A10000000000000000000022 /* LiveAgoraCanvas.swift in Sources */,
+				A10000000000000000000025 /* LiveGiftShow.swift in Sources */,
+				A10000000000000000000021 /* ProfileScreen.swift in Sources */,
 				A10000000000000000000005 /* RootView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -272,6 +389,7 @@
 		};
 		A90000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A20000000000000000000014 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
@@ -279,8 +397,11 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Zohor;
+				INFOPLIST_KEY_CFBundleDisplayName = "لحظة";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "التقاط لحظة لمشاركتها في لحظة.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "وضع لقطتك على الخريطة في موقعك الحالي.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "اختيار لحظة من مكتبتك لمشاركتها في لحظة.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -310,8 +431,11 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Zohor;
+				INFOPLIST_KEY_CFBundleDisplayName = "لحظة";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "التقاط لحظة لمشاركتها في لحظة.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "وضع لقطتك على الخريطة في موقعك الحالي.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "اختيار لحظة من مكتبتك لمشاركتها في لحظة.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -354,6 +478,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A11000000000000000000001 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AgoraIO/AgoraRtcEngine_iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.5.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A11000000000000000000002 /* RtcBasic */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A11000000000000000000001 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */;
+			productName = RtcBasic;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A70000000000000000000001 /* Project object */;
 }

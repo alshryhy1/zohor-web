@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Zohor"
+        android:label="لحظة"
         android:supportsRtl="true"
         android:theme="@style/Theme.Zohor">
         <activity

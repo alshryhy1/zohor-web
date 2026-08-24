@@ -73,9 +73,37 @@ export async function POST(req: Request) {
       );
     }
 
-    const body = (await req.json()) as { mediaUrl?: unknown; desc?: unknown } | null;
+    const body = (await req.json()) as {
+      mediaUrl?: unknown;
+      desc?: unknown;
+      isPublic?: unknown;
+      isPrivate?: unknown;
+      onMap?: unknown;
+      audienceIds?: unknown;
+      lat?: unknown;
+      lng?: unknown;
+    } | null;
     const mediaUrl = String(body?.mediaUrl || "").trim();
     const desc = String(body?.desc || "").trim();
+    const audienceIds = Array.isArray(body?.audienceIds)
+      ? Array.from(
+          new Set(
+            (body?.audienceIds as unknown[])
+              .map((id) => String(id || "").trim())
+              .filter((id) => id.length === 36)
+          )
+        )
+      : [];
+    const askedPublic = body?.isPublic === true || body?.isPublic === "true";
+    const askedPrivate = body?.isPrivate === true || body?.isPrivate === "true";
+    const askedMap = body?.onMap === true || body?.onMap === "true";
+    const hasFlags =
+      body?.isPublic != null || body?.isPrivate != null || body?.onMap != null || audienceIds.length > 0;
+    const isPublic = hasFlags ? askedPublic : true;
+    const isPrivate = askedPrivate;
+    const onMap = askedMap;
+    const lat = Number(body?.lat);
+    const lng = Number(body?.lng);
 
     if (!mediaUrl) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "mediaUrl مطلوب." }, { status: 400 });
@@ -92,28 +120,75 @@ export async function POST(req: Request) {
       : "";
     const username = profileUsername || deriveUsername(user);
     const basePayload = { title: "لحظة", desc: desc || null, media_url: mediaUrl };
+    const publishPayload = {
+      ...basePayload,
+      user_id: meId || null,
+      username: username || null,
+      is_public: isPublic,
+      is_private: isPrivate,
+    };
     const richPayload = { ...basePayload, user_id: meId || null, username: username || null };
     const userIdOnlyPayload = { ...basePayload, user_id: meId || null };
 
     if (admin) {
-      const { error: richErr } = await admin.from("moments").insert(richPayload);
-      if (richErr) {
-        const msg = String(richErr.message || "");
+      let momentId = "";
+      const { data: published, error: publishErr } = await admin
+        .from("moments")
+        .insert(publishPayload)
+        .select("id")
+        .single();
+      if (publishErr) {
+        const msg = String(publishErr.message || "");
         const missingUserId = isMissingColumnError(msg, "user_id");
         const missingUsername = isMissingColumnError(msg, "username");
+        const missingPublish =
+          isMissingColumnError(msg, "is_public") || isMissingColumnError(msg, "is_private");
         if (missingUserId) {
           return NextResponse.json(
             { ok: false, code: "missing_column", message: 'يلزم إضافة عمود user_id لجدول moments.' },
             { status: 500 }
           );
         }
-        if (missingUsername) {
-            const { error } = await admin.from("moments").insert(userIdOnlyPayload);
-            if (!error) return NextResponse.json({ ok: true }, { status: 200 });
+        if (missingPublish || missingUsername) {
+          const fallback = missingUsername ? userIdOnlyPayload : richPayload;
+          const { data, error } = await admin.from("moments").insert(fallback).select("id").single();
+          if (error) {
+            return NextResponse.json({ ok: false, code: "insert_failed", message: error.message }, { status: 500 });
+          }
+          momentId = String((data as { id?: unknown } | null)?.id || "").trim();
+        } else {
+          return NextResponse.json({ ok: false, code: "insert_failed", message: publishErr.message }, { status: 500 });
         }
-        return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
+      } else {
+        momentId = String((published as { id?: unknown } | null)?.id || "").trim();
       }
-      return NextResponse.json({ ok: true }, { status: 200 });
+
+      if (momentId && audienceIds.length) {
+        const rows = audienceIds
+          .filter((id) => id !== meId)
+          .map((viewer_id) => ({ moment_id: momentId, viewer_id }));
+        if (rows.length) {
+          await admin.from("moment_audience").insert(rows);
+        }
+      }
+
+      if (onMap && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const mapPayload = {
+          media_url: mediaUrl,
+          lat,
+          lng,
+          expires_at: expiresAt,
+          user_id: meId || null,
+          username: username || null,
+        };
+        const { error: mapErr } = await admin.from("map_posts").insert(mapPayload);
+        if (mapErr && !isMissingColumnError(String(mapErr.message || ""), "user_id") && !isMissingColumnError(String(mapErr.message || ""), "username")) {
+          return NextResponse.json({ ok: false, code: "map_insert_failed", message: mapErr.message }, { status: 500 });
+        }
+      }
+
+      return NextResponse.json({ ok: true, id: momentId || undefined }, { status: 200 });
     }
 
     return NextResponse.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });

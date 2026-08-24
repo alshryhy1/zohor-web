@@ -92,6 +92,10 @@ export async function POST(req: Request) {
       } catch {}
     }
 
+    try {
+      await admin.from("map_posts").delete().eq("user_id", meId).eq("media_url", mediaUrl);
+    } catch {}
+
     const { error: delErr } = await admin.from("moments").delete().eq("id", momentId).eq("user_id", meId);
     if (delErr) {
       if (isMissingUserIdColumn(delErr.message)) {
