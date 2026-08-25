@@ -712,8 +712,7 @@ struct LiveScreen: View {
                                 appId: join.appId,
                                 token: join.token,
                                 channel: mine.channel,
-                                uid: join.uid,
-                                feed: camera.publishFeed
+                                uid: join.uid
                             )
                         }
                     }
@@ -771,7 +770,7 @@ struct LiveScreen: View {
             if isHosting, let channel = model.mine(userId: appState.session?.userId)?.channel, !channel.isEmpty, let client = appState.apiClient {
                 do {
                     let join = try await client.agoraJoin(channel: channel, role: "host")
-                    agora.host(appId: join.appId, token: join.token, channel: channel, uid: join.uid, feed: camera.publishFeed)
+                    agora.host(appId: join.appId, token: join.token, channel: channel, uid: join.uid)
                 } catch {
                     agora.stop()
                 }
@@ -1195,9 +1194,8 @@ private struct LiveHostStage: View {
     private var watchSurface: some View {
         ZStack {
             MediaStageFrame()
-            if remoteVideo {
-                LiveAgoraCanvas(view: agora.canvas)
-            }
+            LiveAgoraCanvas(view: agora.canvas)
+                .opacity(remoteVideo ? 1 : 0)
         }
     }
 

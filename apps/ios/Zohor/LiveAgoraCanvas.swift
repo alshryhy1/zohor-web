@@ -37,7 +37,7 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
         let kit = AgoraRtcEngineKit.sharedEngine(withAppId: appId, delegate: self)
         engine = kit
         kit.setChannelProfile(.liveBroadcasting)
-        kit.setClientRole(host ? .broadcaster : .audience)
+        kit.enableAudio()
         kit.enableVideo()
         kit.setDefaultAudioRouteToSpeakerphone(true)
         let options = AgoraRtcChannelMediaOptions()
@@ -45,6 +45,7 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
         options.autoSubscribeAudio = true
         options.autoSubscribeVideo = true
         if host {
+            kit.setClientRole(.broadcaster)
             let custom = feed != nil
             kit.setExternalVideoSource(custom, useTexture: false, sourceType: .videoFrame)
             kit.enableLocalVideo(!custom)
@@ -55,11 +56,13 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
                 let local = AgoraRtcVideoCanvas()
                 local.uid = 0
                 local.view = canvas
-                local.renderMode = .hidden
+                local.renderMode = .fit
                 kit.setupLocalVideo(local)
                 kit.startPreview()
             }
         } else {
+            kit.setClientRole(.audience)
+            options.audienceLatencyLevel = .lowLatency
             options.publishCameraTrack = false
             options.publishCustomVideoTrack = false
             options.publishMicrophoneTrack = false
@@ -82,10 +85,10 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
         joinedChannel = ""
         canvas.subviews.forEach { $0.removeFromSuperview() }
         #if canImport(AgoraRtcKit)
+        engine?.setupLocalVideo(AgoraRtcVideoCanvas())
         engine?.setupRemoteVideo(AgoraRtcVideoCanvas())
         engine?.leaveChannel(nil)
         engine = nil
-        AgoraRtcEngineKit.destroy()
         #endif
     }
 
@@ -184,11 +187,14 @@ extension LiveAgoraWatcher: AgoraRtcEngineDelegate {
 
     private func attach(uid: UInt, engine: AgoraRtcEngineKit) {
         canvas.backgroundColor = .black
+        canvas.isHidden = false
         let remote = AgoraRtcVideoCanvas()
         remote.uid = uid
         remote.view = canvas
-        remote.renderMode = .hidden
+        remote.renderMode = .fit
         engine.setupRemoteVideo(remote)
+        engine.muteRemoteVideoStream(uid, mute: false)
+        engine.muteRemoteAudioStream(uid, mute: false)
         hasRemote = true
     }
 }

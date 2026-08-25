@@ -50,6 +50,7 @@
 		A20000000000000000000012 /* AuthField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthField.swift; sourceTree = "<group>"; };
 		A20000000000000000000013 /* AuthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthView.swift; sourceTree = "<group>"; };
 		A20000000000000000000014 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Config/Debug.xcconfig; sourceTree = "<group>"; };
+		A20000000000000000000028 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Config/Release.xcconfig; sourceTree = "<group>"; };
 		A20000000000000000000015 /* ScreenPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenPhase.swift; sourceTree = "<group>"; };
 		A20000000000000000000016 /* ZohorChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZohorChrome.swift; sourceTree = "<group>"; };
 		A20000000000000000000017 /* MainTabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabBar.swift; sourceTree = "<group>"; };
@@ -82,6 +83,7 @@
 			children = (
 				A40000000000000000000002 /* Zohor */,
 				A20000000000000000000014 /* Debug.xcconfig */,
+				A20000000000000000000028 /* Release.xcconfig */,
 				A40000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -391,15 +393,18 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = A20000000000000000000014 /* Debug.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = GZ9M83BFAK;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "لحظة";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "التقاط لحظة لمشاركتها في لحظة.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "بث الصوت أثناء المباشر.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "وضع لقطتك على الخريطة في موقعك الحالي.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "اختيار لحظة من مكتبتك لمشاركتها في لحظة.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -411,8 +416,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zohor.app;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alshryhy.lahza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -424,16 +429,20 @@
 		};
 		A90000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A20000000000000000000028 /* Release.xcconfig */;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = GZ9M83BFAK;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "لحظة";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "التقاط لحظة لمشاركتها في لحظة.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "بث الصوت أثناء المباشر.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "وضع لقطتك على الخريطة في موقعك الحالي.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "اختيار لحظة من مكتبتك لمشاركتها في لحظة.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -445,8 +454,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.zohor.app;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alshryhy.lahza;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

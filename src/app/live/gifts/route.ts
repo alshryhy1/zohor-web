@@ -43,13 +43,13 @@ async function walletCoins(admin: NonNullable<ReturnType<typeof buildSupabaseAdm
 
 async function seedWalletIfMissing(admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>, meId: string) {
   const current = await walletCoins(admin, meId);
-  if (current != null) return current;
+  if (current != null && current >= TEST_WALLET_SEED) return current;
   const { error } = await admin.from("live_wallets").upsert({
     user_id: meId,
     coins: TEST_WALLET_SEED,
     updated_at: new Date().toISOString(),
   });
-  if (error) return 0;
+  if (error) return current ?? 0;
   return TEST_WALLET_SEED;
 }
 
