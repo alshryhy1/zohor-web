@@ -96,6 +96,9 @@ struct AuthView: View {
             form
             statusRegion
             submitButton
+            if mode == .signUp {
+                legalNotice
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, isCompactHeight ? 20 : 26)
@@ -277,6 +280,31 @@ struct AuthView: View {
         .disabled(isSubmitting || !canSubmit)
         .accessibilityLabel(submitTitle)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var legalNotice: some View {
+        VStack(spacing: 6) {
+            Text("بإنشاء الحساب أوافق على شروط الاستخدام وسياسة الخصوصية ومعايير المجتمع.")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.58))
+                .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                legalLink("الشروط", path: "/terms")
+                legalLink("الخصوصية", path: "/privacy")
+                legalLink("المجتمع", path: "/community")
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func legalLink(_ title: String, path: String) -> some View {
+        Button(title) {
+            guard let url = URL(string: "https://www.lahzha.com\(path)") else { return }
+            UIApplication.shared.open(url)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(ZohorTheme.gold)
+        .buttonStyle(.plain)
     }
 
     private var submitTitle: String {

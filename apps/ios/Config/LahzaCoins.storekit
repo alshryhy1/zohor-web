@@ -1,0 +1,81 @@
+{
+  "identifier" : "LahzaCoins",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "3.99",
+      "familyShareable" : false,
+      "internalID" : "lahza1handful",
+      "localizations" : [
+        {
+          "description" : "100 luma",
+          "displayName" : "حفنة",
+          "locale" : "ar"
+        }
+      ],
+      "productID" : "lahza.coins.handful",
+      "referenceName" : "Handful",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "19.99",
+      "familyShareable" : false,
+      "internalID" : "lahza1chest",
+      "localizations" : [
+        {
+          "description" : "550 luma",
+          "displayName" : "صندوق",
+          "locale" : "ar"
+        }
+      ],
+      "productID" : "lahza.coins.chest",
+      "referenceName" : "Chest",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "49.99",
+      "familyShareable" : false,
+      "internalID" : "lahza1vault",
+      "localizations" : [
+        {
+          "description" : "1500 luma",
+          "displayName" : "خزينة",
+          "locale" : "ar"
+        }
+      ],
+      "productID" : "lahza.coins.vault",
+      "referenceName" : "Vault",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "119.99",
+      "familyShareable" : false,
+      "internalID" : "lahza1empire",
+      "localizations" : [
+        {
+          "description" : "4000 luma",
+          "displayName" : "إمبراطورية",
+          "locale" : "ar"
+        }
+      ],
+      "productID" : "lahza.coins.empire",
+      "referenceName" : "Empire",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

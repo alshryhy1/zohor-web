@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { supabaseServer } from "@/lib/supabase/server";
-import { authErrorResponse, bearerTokenFromRequest, getAuthenticatedUser, userId } from "@/lib/supabase/auth";
+import { authErrorResponse, bearerTokenFromRequest, getAuthenticatedUser, userEmail, userId } from "@/lib/supabase/auth";
 import { type NextRequest } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -38,13 +38,6 @@ function buildSupabaseAdmin() {
   return createClient(url, service);
 }
 
-function deriveDisplayName(user: unknown) {
-  const u = user as UserLike | null;
-  const meta = (u?.user_metadata || {}) as Record<string, unknown>;
-  const name = String(meta["name"] || meta["full_name"] || "").trim();
-  return name;
-}
-
 function deriveAvatarUrl(user: unknown) {
   const u = user as UserLike | null;
   const meta = (u?.user_metadata || {}) as Record<string, unknown>;
@@ -53,14 +46,10 @@ function deriveAvatarUrl(user: unknown) {
 
 function deriveUsername(user: unknown) {
   const u = user as UserLike | null;
-  const meta = (u?.user_metadata || {}) as Record<string, unknown>;
-  const metaName =
-    (meta["username"] as string | undefined) ||
-    (meta["name"] as string | undefined) ||
-    (meta["full_name"] as string | undefined);
+  const handle = metaString(user, "username");
+  if (handle) return handle;
   const email = typeof u?.email === "string" ? u.email : "";
   const phone = typeof u?.phone === "string" ? u.phone : "";
-  if (metaName && String(metaName).trim()) return String(metaName).trim();
   if (email.includes("@")) return String(email.split("@")[0] || "").trim();
   if (phone) return phone;
   return "";
@@ -246,7 +235,7 @@ async function getBearerProfile(req: NextRequest) {
 
     const phone = normalizePhone(String((data as { phone?: unknown } | null)?.phone || ""));
     const username = String((data as { username?: unknown } | null)?.username || "").trim() || metaString(user, "username") || deriveUsername(user);
-    const displayName = String((data as { display_name?: unknown } | null)?.display_name || "").trim() || deriveDisplayName(user);
+    const displayName = String((data as { display_name?: unknown } | null)?.display_name || "").trim();
     const avatarUrl = String((data as { avatar_url?: unknown } | null)?.avatar_url || "").trim() || deriveAvatarUrl(user);
     return Response.json({ ok: true, profile: { id: meId, username, phone, displayName: displayName || null, avatarUrl: avatarUrl || null } }, { status: 200 });
   } catch (e: unknown) {
@@ -268,12 +257,20 @@ async function postBearerProfile(req: NextRequest) {
       username?: unknown;
       displayName?: unknown;
       avatarUrl?: unknown;
+      email?: unknown;
     } | null;
     const phone = normalizePhone(String(body?.phone || ""));
     const requestedUsername = String(body?.username || "").trim();
     const displayName = String(body?.displayName || "").trim();
     const avatarUrl = String(body?.avatarUrl || "").trim();
-    if (!phone && !requestedUsername) return Response.json({ ok: false, code: "bad_request", message: "اسم المستخدم مطلوب." }, { status: 400 });
+    const bindEmail = String(body?.email || "").trim();
+    const jwtEmail = userEmail(user);
+    if (bindEmail && jwtEmail && bindEmail.toLowerCase() !== jwtEmail.toLowerCase()) {
+      return Response.json({ ok: false, code: "session_mismatch", message: "الجلسة لا تطابق هذا الحساب." }, { status: 409 });
+    }
+    if (!phone && !requestedUsername && !displayName && !avatarUrl) {
+      return Response.json({ ok: false, code: "bad_request", message: "لا يوجد ما يُحفظ." }, { status: 400 });
+    }
 
     const admin = buildSupabaseAdmin();
     if (!admin) {
@@ -287,7 +284,7 @@ async function postBearerProfile(req: NextRequest) {
       }
     }
 
-    const { data: meProfile, error: meErr } = await admin.from("profiles").select("id,username").eq("id", meId).maybeSingle();
+    const { data: meProfile, error: meErr } = await admin.from("profiles").select("id,username,display_name,created_at").eq("id", meId).maybeSingle();
     if (meErr) {
       const msg = String(meErr.message || "");
       if (isMissingColumnError(msg, "phone")) {
@@ -296,7 +293,22 @@ async function postBearerProfile(req: NextRequest) {
       return Response.json({ ok: false, code: "query_failed", message: meErr.message }, { status: 500 });
     }
 
-    const username = requestedUsername || String((meProfile as { username?: unknown } | null)?.username || "").trim() || deriveUsername(user);
+    const existingUsername = String((meProfile as { username?: unknown } | null)?.username || "").trim();
+    const existingName = String((meProfile as { display_name?: unknown } | null)?.display_name || "").trim();
+    if (
+      existingUsername &&
+      requestedUsername &&
+      requestedUsername.toLowerCase() !== existingUsername.toLowerCase() &&
+      displayName &&
+      displayName !== existingName
+    ) {
+      return Response.json(
+        { ok: false, code: "identity_locked", message: "لا يمكن استبدال هوية حساب قائم من تسجيل آخر." },
+        { status: 409 }
+      );
+    }
+
+    const username = requestedUsername || existingUsername || deriveUsername(user);
     if (username) {
       const { data: takenName } = await admin.from("profiles").select("id,username").neq("id", meId);
       const wanted = username.toLowerCase();

@@ -40,6 +40,25 @@ export async function POST(req: Request) {
     try {
       await admin.from("live_room_comments").delete().eq("host_user_id", meId);
       await admin.from("live_room_heat").delete().eq("host_user_id", meId);
+      const { data: openSessions } = await admin
+        .from("live_broadcast_sessions")
+        .select("id,started_at")
+        .eq("host_id", meId)
+        .is("ended_at", null)
+        .order("started_at", { ascending: false })
+        .limit(1);
+      const open = (openSessions || [])[0] as { id?: string; started_at?: string } | undefined;
+      if (open?.id && open.started_at) {
+        const started = new Date(open.started_at).getTime();
+        const seconds = Math.max(0, Math.floor((Date.now() - started) / 1000));
+        await admin
+          .from("live_broadcast_sessions")
+          .update({
+            ended_at: new Date().toISOString(),
+            duration_seconds: seconds,
+          })
+          .eq("id", open.id);
+      }
     } catch {}
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e: unknown) {

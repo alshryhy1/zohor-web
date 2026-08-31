@@ -17,6 +17,8 @@ enum AuthIssue: Equatable {
 final class AppState: ObservableObject {
     @Published var session: UserSession?
     @Published var selectedTab: AppTab = .moments
+    @Published var isBroadcasting = false
+    @Published var liveImmersed = false
     @Published var authError: String?
     @Published var authIssue: AuthIssue?
     @Published private(set) var followingIds: Set<String> = []
@@ -54,7 +56,9 @@ final class AppState: ObservableObject {
         let client = ZohorAPIClient(
             baseURL: runtimeConfig.bffBaseURL,
             supabaseURL: runtimeConfig.supabaseURL,
-            supabaseAnonKey: runtimeConfig.supabaseAnonKey
+            supabaseAnonKey: runtimeConfig.supabaseAnonKey,
+            agoraAppId: runtimeConfig.agoraAppId,
+            agoraAppCertificate: runtimeConfig.agoraAppCertificate
         ) { [weak self] in
             await MainActor.run { self?.session }
         }
@@ -72,8 +76,8 @@ final class AppState: ObservableObject {
             let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
             let nextSession = try await authClient.signIn(email: cleanEmail, password: password)
             try sessionStore.save(nextSession)
-            session = nextSession
-            bindRemotePhotos()
+            adoptSession(nextSession)
+            profile = try? await apiClient?.profile()
         } catch {
             present(issue: issue(for: error), message: message(for: error))
         }
@@ -85,6 +89,9 @@ final class AppState: ObservableObject {
             present(issue: .configuration, message: "إعدادات Supabase غير مكتملة.")
             return
         }
+        if session != nil {
+            signOut()
+        }
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -95,7 +102,7 @@ final class AppState: ObservableObject {
             }
             if let client = apiClient {
                 do {
-                    try await client.registerAccount(
+                    let createdId = try await client.registerAccount(
                         email: cleanEmail,
                         password: password,
                         name: cleanName,
@@ -104,8 +111,7 @@ final class AppState: ObservableObject {
                     try await finishSignUp(
                         email: cleanEmail,
                         password: password,
-                        name: cleanName,
-                        username: cleanUsername,
+                        createdUserId: createdId,
                         photoJPEG: photoJPEG
                     )
                     return
@@ -125,8 +131,7 @@ final class AppState: ObservableObject {
             try await finishSignUp(
                 email: cleanEmail,
                 password: password,
-                name: cleanName,
-                username: cleanUsername,
+                createdUserId: "",
                 photoJPEG: photoJPEG
             )
         } catch {
@@ -134,21 +139,44 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func finishSignUp(email: String, password: String, name: String, username: String, photoJPEG: Data?) async throws {
+    private func finishSignUp(email: String, password: String, createdUserId: String, photoJPEG: Data?) async throws {
         guard let authClient else { throw ZohorAPIError.missingSession }
         let nextSession = try await authClient.signIn(email: email, password: password)
+        let signedEmail = nextSession.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let signedId = nextSession.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedId = createdUserId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let emailMatches = signedEmail.compare(email, options: .caseInsensitive) == .orderedSame
+        let idMatches = expectedId.isEmpty || signedId.compare(expectedId, options: .caseInsensitive) == .orderedSame
+        guard emailMatches, idMatches else {
+            signOut()
+            throw ZohorAPIError.server(
+                code: "session_mismatch",
+                message: "تعذر فتح الحساب الجديد. ادخل بالبريد الذي سجّلت به.",
+                status: 401
+            )
+        }
         try sessionStore.save(nextSession)
-        session = nextSession
-        bindRemotePhotos()
-        var avatarURL: URL?
+        adoptSession(nextSession)
         if let photoJPEG, let client = apiClient {
-            avatarURL = try? await client.uploadMomentMedia(
+            if let avatarURL = try? await client.uploadMomentMedia(
                 data: photoJPEG,
                 filename: "avatar.jpg",
                 mimeType: "image/jpeg"
-            )
+            ) {
+                try? await client.saveAvatar(avatarURL)
+            }
         }
-        try? await apiClient?.saveAccount(username: username, displayName: name, avatarUrl: avatarURL)
+        profile = try? await apiClient?.profile()
+    }
+
+    private func adoptSession(_ next: UserSession) {
+        followingIds = []
+        pendingChat = nil
+        isBroadcasting = false
+        liveImmersed = false
+        profile = nil
+        session = next
+        bindRemotePhotos()
     }
 
     private func shouldStopAfterSourceError(_ error: Error) -> Bool {
@@ -202,6 +230,8 @@ final class AppState: ObservableObject {
         pendingChat = nil
         profile = nil
         selectedTab = .moments
+        isBroadcasting = false
+        liveImmersed = false
         clearAuthError()
         bindRemotePhotos()
     }

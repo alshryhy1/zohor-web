@@ -28,6 +28,7 @@ create extension if not exists pgcrypto;
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
+set search_path = public
 as $$
 begin
   new.updated_at = now();
@@ -638,11 +639,6 @@ set
   allowed_mime_types = excluded.allowed_mime_types;
 
 drop policy if exists "moments_media_public_read" on storage.objects;
-create policy "moments_media_public_read"
-on storage.objects
-for select
-to anon, authenticated
-using (bucket_id = 'moments-media');
 
 drop policy if exists "moments_media_authenticated_insert" on storage.objects;
 create policy "moments_media_authenticated_insert"

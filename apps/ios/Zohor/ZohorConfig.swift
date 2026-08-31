@@ -16,12 +16,22 @@ struct ZohorRuntimeConfig {
     let supabaseURL: URL
     let supabaseAnonKey: String
     let bffBaseURL: URL
+    let agoraAppId: String
+    let agoraAppCertificate: String
 
     static func load() throws -> ZohorRuntimeConfig {
         let supabaseURL = try urlValue("ZOHOR_SUPABASE_URL")
         let anonKey = try stringValue("ZOHOR_SUPABASE_ANON_KEY")
         let bffURL = (try? urlValue("ZOHOR_BFF_BASE_URL")) ?? supabaseURL
-        return ZohorRuntimeConfig(supabaseURL: supabaseURL, supabaseAnonKey: anonKey, bffBaseURL: bffURL)
+        let agoraAppId = (try? stringValue("ZOHOR_AGORA_APP_ID")) ?? ""
+        let agoraAppCertificate = (try? stringValue("ZOHOR_AGORA_APP_CERTIFICATE")) ?? ""
+        return ZohorRuntimeConfig(
+            supabaseURL: supabaseURL,
+            supabaseAnonKey: anonKey,
+            bffBaseURL: bffURL,
+            agoraAppId: agoraAppId,
+            agoraAppCertificate: agoraAppCertificate
+        )
     }
 
     private static func stringValue(_ key: String) throws -> String {

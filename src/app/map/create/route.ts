@@ -122,14 +122,11 @@ function normalizeContentType(raw: string) {
 function deriveUsername(user: unknown) {
   const u = user as UserLike | null;
   const meta = (u?.user_metadata || {}) as Record<string, unknown>;
-  const metaName =
-    (meta["username"] as string | undefined) ||
-    (meta["name"] as string | undefined) ||
-    (meta["full_name"] as string | undefined);
+  const handle = String(meta["username"] || "").trim();
+  if (handle) return handle;
   const email = typeof u?.email === "string" ? u.email : "";
   const phone = typeof u?.phone === "string" ? u.phone : "";
   const id = typeof u?.id === "string" ? u.id : "";
-  if (metaName && String(metaName).trim()) return String(metaName).trim();
   if (email.includes("@")) return String(email.split("@")[0] || "").trim();
   if (phone) return phone;
   if (id) return `مستخدم-${id.slice(0, 6)}`;

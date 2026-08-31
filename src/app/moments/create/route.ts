@@ -5,13 +5,10 @@ import { authErrorResponse, getAuthenticatedUser, userEmailVerified, userId } fr
 function deriveUsername(user: unknown) {
   const u = user as { email?: unknown; phone?: unknown; id?: unknown; user_metadata?: Record<string, unknown> } | null;
   const meta = (u?.user_metadata || {}) as Record<string, unknown>;
-  const metaName =
-    (meta["username"] as string | undefined) ||
-    (meta["name"] as string | undefined) ||
-    (meta["full_name"] as string | undefined);
+  const handle = String(meta["username"] || "").trim();
+  if (handle) return handle;
   const email = typeof u?.email === "string" ? u.email : "";
   const phone = typeof u?.phone === "string" ? u.phone : "";
-  if (metaName && String(metaName).trim()) return String(metaName).trim();
   if (email.includes("@")) return String(email.split("@")[0] || "").trim();
   if (phone) return phone;
   return "";

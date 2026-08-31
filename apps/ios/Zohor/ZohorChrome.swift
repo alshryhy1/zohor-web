@@ -96,18 +96,54 @@ struct ZohorInlineNotice: View {
 }
 
 struct MediaStageFrame: View {
+    var backdropUrl: URL? = nil
+    var backdropImage: UIImage? = nil
+
     var body: some View {
-        RoundedRectangle(cornerRadius: ZohorTheme.radiusMedia, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color(light: Color(red: 0.20, green: 0.175, blue: 0.15), dark: Color(red: 0.14, green: 0.12, blue: 0.10)),
-                        Color(light: Color(red: 0.11, green: 0.095, blue: 0.08), dark: Color(red: 0.06, green: 0.05, blue: 0.04)),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
+        ZStack {
+            RoundedRectangle(cornerRadius: ZohorTheme.radiusMedia, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(light: Color(red: 0.20, green: 0.175, blue: 0.15), dark: Color(red: 0.14, green: 0.12, blue: 0.10)),
+                            Color(light: Color(red: 0.11, green: 0.095, blue: 0.08), dark: Color(red: 0.06, green: 0.05, blue: 0.04)),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
                 )
-            )
+            if let backdropImage {
+                Image(uiImage: backdropImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+            } else if backdropUrl != nil {
+                RemoteFillImage(url: backdropUrl)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ZohorTheme.radiusMedia, style: .continuous))
+    }
+}
+
+struct RemoteFillImage: View {
+    let url: URL?
+    @StateObject private var loader = PersonPhotoLoader()
+
+    var body: some View {
+        Group {
+            if let image = loader.image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .task(id: url?.absoluteString) {
+            await loader.load(url)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -155,7 +191,7 @@ struct PersonPhoto: View {
 }
 
 @MainActor
-private final class PersonPhotoLoader: ObservableObject {
+final class PersonPhotoLoader: ObservableObject {
     @Published var image: UIImage?
 
     func load(_ url: URL?) async {

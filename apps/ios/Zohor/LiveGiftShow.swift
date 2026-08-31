@@ -8,8 +8,10 @@ enum LiveGiftAudio {
 
     static func play(_ gift: LiveGiftItem) {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-        try? session.setActive(true)
+        if session.category != .playAndRecord {
+            try? session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
+            try? session.setActive(true)
+        }
         let name = fileName(gift.mark)
         let url = Self.bundledSound(name)
         guard let url else { return }
@@ -37,7 +39,10 @@ enum LiveGiftAudio {
         case .crown: return "gift_crown"
         case .beads: return "gift_beads"
         case .falcon: return "gift_falcon"
+        case .camel: return "gift_camel"
         case .horse: return "gift_horse"
+        case .lion: return "gift_lion"
+        case .cat: return "gift_cat"
         case .palace: return "gift_palace"
         case .car: return "gift_car"
         case .star: return "gift_star"
@@ -89,7 +94,10 @@ struct LiveGiftStage3D: UIViewRepresentable {
         case .perfume: return UIColor(red: 0.86, green: 0.72, blue: 0.92, alpha: 1)
         case .beads: return UIColor(red: 0.92, green: 0.90, blue: 0.96, alpha: 1)
         case .falcon: return UIColor(red: 0.92, green: 0.74, blue: 0.28, alpha: 1)
+        case .camel: return UIColor(red: 0.86, green: 0.62, blue: 0.32, alpha: 1)
         case .horse: return UIColor(red: 0.78, green: 0.70, blue: 0.58, alpha: 1)
+        case .lion: return UIColor(red: 0.92, green: 0.58, blue: 0.18, alpha: 1)
+        case .cat: return UIColor(red: 0.96, green: 0.82, blue: 0.62, alpha: 1)
         case .palace: return UIColor(red: 1, green: 0.78, blue: 0.32, alpha: 1)
         case .star: return UIColor(red: 1, green: 0.92, blue: 0.62, alpha: 1)
         case .yacht: return UIColor(red: 0.55, green: 0.72, blue: 0.92, alpha: 1)
@@ -105,11 +113,10 @@ struct LiveGiftStage3D: UIViewRepresentable {
         material.lightingModel = .physicallyBased
         material.diffuse.contents = image
         material.emission.contents = image
-        material.emission.intensity = hero ? 0.48 : 0.26
-        material.metalness.contents = 0.78
-        material.roughness.contents = 0.26
-        material.transparent.contents = image
-        material.transparencyMode = .rgbZero
+        material.emission.intensity = hero ? 0.36 : 0.18
+        material.metalness.contents = 0.22
+        material.roughness.contents = 0.55
+        material.transparencyMode = .aOne
         material.isDoubleSided = true
         material.writesToDepthBuffer = false
         plane.firstMaterial = material
@@ -118,8 +125,11 @@ struct LiveGiftStage3D: UIViewRepresentable {
         node.position = SCNVector3(0, 0.04, 0)
         node.eulerAngles.x = -0.12
         if spinning {
-            let spin = SCNAction.repeatForever(SCNAction.rotateBy(x: 0, y: hero ? 2.8 : 1.6, z: 0, duration: hero ? 2.4 : 3.8))
-            node.runAction(spin)
+            let tilt = SCNAction.sequence([
+                SCNAction.rotateBy(x: 0.08, y: 0.35, z: 0, duration: 1.6),
+                SCNAction.rotateBy(x: -0.08, y: -0.35, z: 0, duration: 1.6),
+            ])
+            node.runAction(SCNAction.repeatForever(tilt))
         }
         scene.rootNode.addChildNode(node)
 
@@ -176,14 +186,53 @@ struct LiveGiftStage3D: UIViewRepresentable {
     }
 }
 
-enum LiveGiftCutout {
-    static func image(named name: String) -> UIImage {
-        guard let source = UIImage(named: name), let cg = source.cgImage else {
-            return UIImage()
+struct LiveGiftArt: View {
+    let mark: LiveGiftMark
+
+    var body: some View {
+        let image = LiveGiftCutout.image(named: mark.imageName)
+        ZStack {
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.84, blue: 0.40).opacity(0.22),
+                            Color.black.opacity(0.12),
+                            .clear,
+                        ],
+                        center: .center,
+                        startRadius: 6,
+                        endRadius: 70
+                    )
+                )
+            if image.size.width > 1 {
+                Image(uiImage: image)
+                    .renderingMode(.original)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            }
         }
+    }
+}
+
+enum LiveGiftCutout {
+    private static var cache: [String: UIImage] = [:]
+
+    static func image(named name: String) -> UIImage {
+        if let hit = cache[name] { return hit }
+        guard let source = UIImage(named: name) else { return UIImage() }
+        let cut = punchBackdrop(source) ?? source
+        cache[name] = cut
+        return cut
+    }
+
+    private static func punchBackdrop(_ source: UIImage) -> UIImage? {
+        guard let cg = source.cgImage else { return source }
         let width = cg.width
         let height = cg.height
-        guard let ctx = CGContext(
+        let count = width * height
+        guard count > 0, let ctx = CGContext(
             data: nil,
             width: width,
             height: height,
@@ -194,17 +243,43 @@ enum LiveGiftCutout {
         ) else { return source }
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let data = ctx.data else { return source }
-        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-        let count = width * height
-        for i in 0..<count {
+        let pixels = data.bindMemory(to: UInt8.self, capacity: count * 4)
+
+        func isBackdrop(_ i: Int) -> Bool {
             let o = i * 4
-            let r = Int(pixels[o])
-            let g = Int(pixels[o + 1])
-            let b = Int(pixels[o + 2])
-            if r + g + b < 78 {
-                pixels[o + 3] = 0
-            }
+            return Int(pixels[o]) < 10 && Int(pixels[o + 1]) < 10 && Int(pixels[o + 2]) < 10
         }
+
+        var seen = [UInt8](repeating: 0, count: count)
+        var queue = [Int]()
+        queue.reserveCapacity(width * 4)
+        for x in 0..<width {
+            queue.append(x)
+            queue.append((height - 1) * width + x)
+        }
+        for y in 0..<height {
+            queue.append(y * width)
+            queue.append(y * width + (width - 1))
+        }
+        var head = 0
+        while head < queue.count {
+            let i = queue[head]
+            head += 1
+            if i < 0 || i >= count || seen[i] == 1 { continue }
+            seen[i] = 1
+            guard isBackdrop(i) else { continue }
+            pixels[i * 4 + 3] = 0
+            let x = i % width
+            let y = i / width
+            if x > 0 { queue.append(i - 1) }
+            if x + 1 < width { queue.append(i + 1) }
+            if y > 0 { queue.append(i - width) }
+            if y + 1 < height { queue.append(i + width) }
+        }
+
+        var kept = 0
+        for i in 0..<count where pixels[i * 4 + 3] > 20 { kept += 1 }
+        if kept < count / 20 { return source }
         guard let punched = ctx.makeImage() else { return source }
         return UIImage(cgImage: punched, scale: source.scale, orientation: source.imageOrientation)
     }

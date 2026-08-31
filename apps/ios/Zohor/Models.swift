@@ -14,6 +14,32 @@ struct AccountStats: Equatable {
     var likes: Int = 0
 }
 
+struct HostPayoutSummary: Codable, Equatable {
+    var shareBps: Int
+    var badgePeak: Bool
+    var withdrawFrozen: Bool
+    var kycReady: Bool
+    var earningsSar: Double
+    var clearingSar: Double
+    var pendingWithdrawalSar: Double
+    var withdrawableSar: Double
+    var minWithdrawalSar: Double
+
+    var sharePercent: Int { shareBps / 100 }
+
+    enum CodingKeys: String, CodingKey {
+        case shareBps = "share_bps"
+        case badgePeak = "badge_peak"
+        case withdrawFrozen = "withdraw_frozen"
+        case kycReady = "kyc_ready"
+        case earningsSar = "earnings_sar"
+        case clearingSar = "clearing_sar"
+        case pendingWithdrawalSar = "pending_withdrawal_sar"
+        case withdrawableSar = "withdrawable_sar"
+        case minWithdrawalSar = "min_withdrawal_sar"
+    }
+}
+
 enum FollowListKind: String, Equatable {
     case followers
     case following
@@ -206,8 +232,38 @@ struct LiveHost: Identifiable, Equatable {
     var level: Int = 1
     var progress: Double = 0
     var giftCount: Int = 0
+    var media: LiveMediaMode = .video
+    var backdropUrl: URL? = nil
 
     var shownName: String { IdentityLabel.shown(displayName: displayName, username: username) }
+    var isAudio: Bool { media == .audio }
+}
+
+enum LiveMediaMode: String, Equatable {
+    case video
+    case audio
+}
+
+enum LiveChallengeMode: String, Equatable {
+    case duel
+    case trio
+    case twovstwo
+
+    var title: String {
+        switch self {
+        case .duel: return "ثنائي"
+        case .trio: return "ثلاثي"
+        case .twovstwo: return "2 ضد 2"
+        }
+    }
+
+    var capacity: Int {
+        switch self {
+        case .duel: return 2
+        case .trio: return 3
+        case .twovstwo: return 4
+        }
+    }
 }
 
 struct LiveSeat: Identifiable, Equatable {
@@ -218,6 +274,7 @@ struct LiveSeat: Identifiable, Equatable {
     var displayName: String = ""
     var avatarUrl: URL? = nil
     var score: Int = 0
+    var team: Int = 0
     var level: Int = 1
     var progress: Double = 0
     var giftCount: Int = 0
@@ -226,13 +283,41 @@ struct LiveSeat: Identifiable, Equatable {
     var shownName: String { IdentityLabel.shown(displayName: displayName, username: username) }
 }
 
+struct LiveRoomStaff: Equatable {
+    var canModerate = false
+    var isHost = false
+    var isModerator = false
+    var kicked = false
+    var banned = false
+    var muted = false
+    var moderatorIds: [String] = []
+    var mutedIds: [String] = []
+
+    func isModeratorId(_ userId: String) -> Bool {
+        let key = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return moderatorIds.contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key }
+    }
+
+    func isMutedId(_ userId: String) -> Bool {
+        let key = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return mutedIds.contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key }
+    }
+}
+
+struct LiveStaffPerson: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+
 struct LiveEngageBoard: Equatable {
     var heat: Int = 0
     var comments: [LiveComment] = []
+    var canComment = false
     var level: Int = 1
     var progress: Double = 0
     var giftCount: Int = 0
     var gifts: [LiveGiftEvent] = []
+    var staff = LiveRoomStaff()
 }
 
 struct LiveGiftEvent: Equatable {
@@ -251,13 +336,52 @@ struct LiveIncoming: Equatable {
 struct LiveChallenge: Equatable {
     var id: String = ""
     var createdBy: String = ""
+    var mode: LiveChallengeMode = .duel
     var seats: [LiveSeat] = (0..<4).map { LiveSeat(index: $0) }
     var seekingSeconds: Int = 0
     var incoming: LiveIncoming? = nil
+    var teamA = 0
+    var teamB = 0
 
     var seatedCount: Int { seats.filter { !$0.isEmpty }.count }
     var isSeeking: Bool { seekingSeconds > 0 }
     var giftCount: Int { seats.reduce(0) { $0 + $1.giftCount } }
+    var capacity: Int { mode.capacity }
+}
+
+struct VoiceBoard: Equatable {
+    var room: VoiceRoom?
+    var seats: [VoiceSeat] = []
+    var comments: [LiveComment] = []
+    var canComment = false
+    var staff = LiveRoomStaff()
+}
+
+struct VoiceRoom: Identifiable, Equatable {
+    let id: String
+    let hostUserId: String
+    var username: String = ""
+    let channel: String
+    var displayName: String = ""
+    var backdropUrl: URL? = nil
+
+    var shownName: String { IdentityLabel.roomShown(displayName: displayName, username: username) }
+}
+
+struct VoiceSeat: Identifiable, Equatable {
+    var id: String { userId }
+    let userId: String
+    var role: String = "waiting"
+    var username: String = ""
+    var displayName: String = ""
+    var avatarUrl: URL? = nil
+
+    var shownName: String { IdentityLabel.roomShown(displayName: displayName, username: username) }
+    var canSpeak: Bool { role == "host" || role == "speaker" }
+}
+
+enum VoiceRoomLimit {
+    static let speakerCap = 14
 }
 
 struct LiveComment: Identifiable, Equatable {
@@ -271,7 +395,7 @@ struct LiveComment: Identifiable, Equatable {
 }
 
 enum LiveGiftMark: String, Equatable {
-    case rose, coffee, oud, ring, perfume, crown, beads, falcon, horse, palace, car, yacht, star
+    case rose, coffee, oud, ring, perfume, crown, beads, falcon, camel, horse, lion, cat, palace, car, yacht, star
 
     var imageName: String {
         switch self {
@@ -283,7 +407,10 @@ enum LiveGiftMark: String, Equatable {
         case .crown: return "gift_moment_crown"
         case .beads: return "gift_pearl_misbaha"
         case .falcon: return "gift_gold_falcon"
+        case .camel: return "gift_desert_camel"
         case .horse: return "gift_arabian_horse"
+        case .lion: return "gift_gold_lion"
+        case .cat: return "gift_gentle_cat"
         case .palace: return "gift_dawn_palace"
         case .car: return "gift_gold_coupe"
         case .yacht: return "gift_royal_yacht"
@@ -343,7 +470,12 @@ struct LiveCoinPack: Identifiable, Equatable {
     let title: String
     let hint: String
     let coins: Int
-    let price: String
+    let baseCoins: Int
+    let bonusCoins: Int
+    let priceFallback: String
+    let featured: Bool
+
+    var price: String { priceFallback }
 }
 
 enum LiveLuxury {
@@ -352,15 +484,18 @@ enum LiveLuxury {
         LiveGiftItem(id: "arabic_coffee", title: "قهوة عربية", hint: "فنجان ضيافة", coins: 20, mark: .coffee, tier: .greeting),
         LiveGiftItem(id: "bukhoor", title: "مبخر عود", hint: "رائحة المجلس", coins: 35, mark: .oud, tier: .greeting),
         LiveGiftItem(id: "gold_ring", title: "خاتم ذهب", hint: "لمعة في الإصبع", coins: 50, mark: .ring, tier: .fine),
+        LiveGiftItem(id: "gentle_cat", title: "قطة وديعة", hint: "مواء حنّون", coins: 60, mark: .cat, tier: .fine),
         LiveGiftItem(id: "french_perfume", title: "عطر فرنسي", hint: "زجاجة مختومة", coins: 80, mark: .perfume, tier: .fine),
         LiveGiftItem(id: "moment_crown", title: "تاج ذهب", hint: "سيادة الغرفة", coins: 120, mark: .crown, tier: .fine),
         LiveGiftItem(id: "pearl_misbaha", title: "مسبحة لؤلؤ", hint: "عقد فاخر", coins: 180, mark: .beads, tier: .rare),
         LiveGiftItem(id: "gold_falcon", title: "صقر حر", hint: "هيبة الصيد", coins: 300, mark: .falcon, tier: .rare),
+        LiveGiftItem(id: "eternal_star", title: "ليلة نجوم", hint: "سماء كاملة", coins: 400, mark: .star, tier: .rare),
         LiveGiftItem(id: "arabian_horse", title: "فرس عربي", hint: "أصيل أشهب", coins: 520, mark: .horse, tier: .rare),
         LiveGiftItem(id: "dawn_palace", title: "قصر فجر", hint: "قبة وذهب", coins: 800, mark: .palace, tier: .mythic),
         LiveGiftItem(id: "gold_coupe", title: "سيارة ذهب", hint: "كوبيه لامعة", coins: 1600, mark: .car, tier: .mythic),
-        LiveGiftItem(id: "eternal_star", title: "ليلة نجوم", hint: "سماء كاملة", coins: 2000, mark: .star, tier: .mythic),
+        LiveGiftItem(id: "gold_lion", title: "أسد ذهب", hint: "زئير الهيبة", coins: 2500, mark: .lion, tier: .mythic),
         LiveGiftItem(id: "royal_yacht", title: "يخت ملكي", hint: "أعلى مقام", coins: 3800, mark: .yacht, tier: .mythic),
+        LiveGiftItem(id: "desert_camel", title: "جمل أصيل", hint: "رحلة الرمال", coins: 5000, mark: .camel, tier: .mythic),
     ]
 
     static func gifts(in tier: LiveGiftTier) -> [LiveGiftItem] {
@@ -368,10 +503,46 @@ enum LiveLuxury {
     }
 
     static let packs: [LiveCoinPack] = [
-        LiveCoinPack(id: "handful", title: "حفنة لُمعة", hint: "بداية الحضور", coins: 100, price: "٤.٩٩ ر.س"),
-        LiveCoinPack(id: "chest", title: "صندوق ذهب", hint: "للسهرات", coins: 500, price: "١٩.٩٩ ر.س"),
-        LiveCoinPack(id: "vault", title: "خزينة لحظة", hint: "حضور وازن", coins: 2000, price: "٦٩.٩٩ ر.س"),
-        LiveCoinPack(id: "empire", title: "إمبراطورية", hint: "أفخم رصيد", coins: 8000, price: "٢٤٩.٩٩ ر.س"),
+        LiveCoinPack(
+            id: "handful",
+            title: "حفنة",
+            hint: "تجربة سريعة",
+            coins: 100,
+            baseCoins: 100,
+            bonusCoins: 0,
+            priceFallback: "٣.٩٩ ر.س",
+            featured: false
+        ),
+        LiveCoinPack(
+            id: "chest",
+            title: "صندوق",
+            hint: "الأكثر اختيارًا",
+            coins: 550,
+            baseCoins: 500,
+            bonusCoins: 50,
+            priceFallback: "١٩.٩٩ ر.س",
+            featured: true
+        ),
+        LiveCoinPack(
+            id: "vault",
+            title: "خزينة",
+            hint: "للمستخدم النشط",
+            coins: 1500,
+            baseCoins: 1200,
+            bonusCoins: 300,
+            priceFallback: "٤٩.٩٩ ر.س",
+            featured: false
+        ),
+        LiveCoinPack(
+            id: "empire",
+            title: "إمبراطورية",
+            hint: "أكبر قيمة",
+            coins: 4000,
+            baseCoins: 3000,
+            bonusCoins: 1000,
+            priceFallback: "١١٩.٩٩ ر.س",
+            featured: false
+        ),
     ]
 }
 
@@ -453,6 +624,23 @@ enum IdentityLabel {
         return username.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static func hasArabic(_ text: String) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            (0x0600...0x06FF).contains(scalar.value)
+                || (0x0750...0x077F).contains(scalar.value)
+                || (0x08A0...0x08FF).contains(scalar.value)
+                || (0xFB50...0xFDFF).contains(scalar.value)
+                || (0xFE70...0xFEFF).contains(scalar.value)
+        }
+    }
+
+    static func roomShown(displayName: String?, username: String) -> String {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if hasArabic(name) { return name }
+        let handle = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        return handle.isEmpty ? name : handle
+    }
+
     static func handle(_ username: String) -> String {
         let value = username.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty { return "" }
@@ -463,11 +651,28 @@ enum IdentityLabel {
 enum ZohorDate {
     static func parse(_ raw: String?) -> Date {
         guard let raw, !raw.isEmpty else { return .distantPast }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = iso.date(from: raw) { return date }
+        if let date = iso.date(from: trimmed) { return date }
         iso.formatOptions = [.withInternetDateTime]
-        return iso.date(from: raw) ?? .distantPast
+        if let date = iso.date(from: trimmed) { return date }
+        let posix = DateFormatter()
+        posix.locale = Locale(identifier: "en_US_POSIX")
+        posix.timeZone = TimeZone(secondsFromGMT: 0)
+        for format in [
+            "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX",
+            "yyyy-MM-dd'T'HH:mm:ssXXXXX",
+            "yyyy-MM-dd HH:mm:ss.SSSSSSXXXXX",
+            "yyyy-MM-dd HH:mm:ssXXXXX",
+            "yyyy-MM-dd'T'HH:mm:ss.SSSSSSxxx",
+            "yyyy-MM-dd HH:mm:ss.SSSSSSxxx",
+            "yyyy-MM-dd HH:mm:ssxxx",
+        ] {
+            posix.dateFormat = format
+            if let date = posix.date(from: trimmed) { return date }
+        }
+        return .distantPast
     }
 }
 

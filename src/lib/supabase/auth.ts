@@ -40,6 +40,22 @@ export function bearerTokenFromRequest(req: Request) {
   return String(match?.[1] || "").trim();
 }
 
+export async function supabaseUserFromRequest(req: Request) {
+  const url = normalizeSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
+  const anon = normalizeKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
+  if (!url || !anon) {
+    throw new ApiAuthError("server_misconfig", "إعدادات الدخول غير مكتملة على السيرفر.", 500);
+  }
+  const bearer = bearerTokenFromRequest(req);
+  if (bearer) {
+    return createClient(url, anon, {
+      global: { headers: { Authorization: `Bearer ${bearer}` } },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+  }
+  return supabaseServer();
+}
+
 function buildBearerClient() {
   const url = normalizeSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL || "");
   const anon = normalizeKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
@@ -88,6 +104,10 @@ export async function getAuthenticatedUser(req: Request): Promise<AuthenticatedU
 
 export function userId(user: unknown) {
   return String((user as { id?: unknown } | null)?.id || "").trim();
+}
+
+export function userEmail(user: unknown) {
+  return String((user as { email?: unknown } | null)?.email || "").trim();
 }
 
 export function userEmailVerified(user: unknown) {

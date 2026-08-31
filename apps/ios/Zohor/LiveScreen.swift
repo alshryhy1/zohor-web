@@ -1,4 +1,5 @@
 import AVFoundation
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -13,50 +14,101 @@ final class LiveViewModel: ObservableObject {
     @Published var roomWash = false
     @Published var showGifts = false
     @Published var showStore = false
-    @Published var showComments = false
+    @Published var showChallenge = false
+    @Published var showBeauty = false
+    @Published var backdropUrl: URL?
+    @Published var backdropImage: UIImage?
     @Published var isBusy = false
     @Published var message: String?
     @Published var heat = 0
     @Published var giftCount = 0
     @Published var comments: [LiveComment] = []
+    @Published var canComment = false
     @Published var commentDraft = ""
+    @Published var voiceRooms: [VoiceRoom] = []
+    @Published var voiceRoom: VoiceRoom?
+    @Published var voiceSeats: [VoiceSeat] = []
+    @Published var staff = LiveRoomStaff()
+    @Published var staffTarget: LiveStaffPerson?
+    @Published var media: LiveMediaMode = .video
     @Published var heartFlies: [LiveHeartFly] = []
+    @Published var deviceBroadcasting = false
     private var sessionUserId: String?
     private var seenGiftIds = Set<String>()
     private var primedEngage = false
     private var lastHeat = 0
     private var giftQueue: [LiveGiftItem] = []
     private var recentlySentKeys = Set<String>()
+    private var giftSendInFlight = false
 
     var selectedReceiverId: String {
-        if let watching, !watching.userId.isEmpty {
-            return watching.userId
+        if let voice = voiceRoom, !voice.hostUserId.isEmpty {
+            return voice.hostUserId
         }
         if challenge.seats.indices.contains(selectedSeat), !challenge.seats[selectedSeat].isEmpty {
             return challenge.seats[selectedSeat].userId
+        }
+        if let watching, !watching.userId.isEmpty {
+            return watching.userId
         }
         return ""
     }
 
     func engageHostId(sessionUserId: String?) -> String {
-        if let watching { return watching.userId }
-        if let mine = mine(userId: sessionUserId ?? self.sessionUserId) { return mine.userId }
-        return sessionUserId ?? self.sessionUserId ?? ""
+        let me = sessionUserId ?? self.sessionUserId ?? ""
+        if !challenge.createdBy.isEmpty, challenge.createdBy != me, challenge.seats.contains(where: { $0.userId == me }) {
+            return challenge.createdBy
+        }
+        if let watching, watching.userId != me {
+            if challenge.seats.indices.contains(selectedSeat), !challenge.seats[selectedSeat].isEmpty {
+                return challenge.seats[selectedSeat].userId
+            }
+            return watching.userId
+        }
+        if let mine = mine(userId: me) { return mine.userId }
+        return me
     }
 
     func load(using client: ZohorAPIClient?, hostUserId: String? = nil, sessionUserId: String? = nil) async {
         if let sessionUserId { self.sessionUserId = sessionUserId }
         let boardHost = hostUserId ?? watching?.userId
-        let engageId = boardHost ?? engageHostId(sessionUserId: self.sessionUserId)
         async let nextHosts = client?.listLiveHosts() ?? []
         async let nextChallenge = client?.liveChallenge(hostUserId: boardHost) ?? LiveChallenge()
         async let nextCoins = client?.liveWallet() ?? 0
         hosts = await nextHosts
         challenge = await nextChallenge
         coins = await nextCoins
-        if !engageId.isEmpty, let client {
-            if let board = try? await client.liveEngageThrowing(action: "get", hostUserId: engageId) {
-                applyEngage(board, hostUserId: engageId)
+        if let rooms = try? await client?.listVoiceRooms() {
+            voiceRooms = rooms
+        }
+        if var watching, let fresh = hosts.first(where: { $0.userId == watching.userId }) {
+            watching.media = fresh.media
+            if !fresh.displayName.isEmpty { watching.displayName = fresh.displayName }
+            if !fresh.username.isEmpty { watching.username = fresh.username }
+            if let avatar = fresh.avatarUrl { watching.avatarUrl = avatar }
+            watching.backdropUrl = fresh.backdropUrl ?? watching.backdropUrl
+            if let url = watching.backdropUrl { backdropUrl = url }
+            self.watching = watching
+            media = fresh.media
+        } else if let watching {
+            media = watching.media
+        } else if let mine = mine(userId: self.sessionUserId) {
+            media = mine.media
+            if let url = mine.backdropUrl { backdropUrl = url }
+        }
+        if let voice = voiceRoom, let client {
+            if let board = try? await client.voiceRoomThrowing(action: "get", hostUserId: voice.hostUserId) {
+                applyVoice(board, fallback: voice)
+            }
+            if let gifts = try? await client.liveEngageThrowing(action: "get", hostUserId: voice.hostUserId) {
+                applyIncomingGifts(gifts)
+            }
+        } else {
+            let engageId = engageHostId(sessionUserId: self.sessionUserId)
+            if !engageId.isEmpty, let client {
+                if let board = try? await client.liveEngageThrowing(action: "get", hostUserId: engageId) {
+                    applyEngage(board, hostUserId: engageId)
+                }
             }
         }
         if let watching, !hosts.contains(where: { $0.id == watching.id }) {
@@ -125,21 +177,14 @@ final class LiveViewModel: ObservableObject {
         lastHeat = board.heat
         heat = board.heat
         comments = board.comments
+        canComment = board.canComment
+        staff = board.staff
         giftCount = max(board.giftCount, challenge.giftCount, giftCount)
-        if primedEngage {
-            for event in board.gifts.reversed() {
-                guard seenGiftIds.insert(event.id).inserted else { continue }
-                if let at = event.createdAt, at < Date().addingTimeInterval(-12) { continue }
-                if event.createdAt == nil { continue }
-                if recentlySentKeys.contains(event.giftKey) { continue }
-                if let gift = LiveLuxury.gifts.first(where: { $0.id == event.giftKey }) {
-                    playIncomingGift(gift)
-                }
-            }
-        } else {
-            seenGiftIds = Set(board.gifts.map(\.id))
-            primedEngage = true
+        if board.staff.banned || board.staff.kicked {
+            watching = nil
+            message = board.staff.banned ? "تم حظرك من هذا البث." : "تم طردك من البث."
         }
+        applyIncomingGifts(board)
         if let index = challenge.seats.firstIndex(where: { $0.userId == hostUserId && !$0.userId.isEmpty }) {
             challenge.seats[index].level = board.level
             challenge.seats[index].progress = board.progress
@@ -149,6 +194,23 @@ final class LiveViewModel: ObservableObject {
             watching.progress = board.progress
             watching.giftCount = board.giftCount
             self.watching = watching
+        }
+    }
+
+    private func applyIncomingGifts(_ board: LiveEngageBoard) {
+        giftCount = max(board.giftCount, giftCount)
+        if primedEngage {
+            for event in board.gifts.reversed() {
+                guard seenGiftIds.insert(event.id).inserted else { continue }
+                if let at = event.createdAt, at > .distantPast, at < Date().addingTimeInterval(-20) { continue }
+                if recentlySentKeys.contains(event.giftKey) { continue }
+                if let gift = LiveLuxury.gifts.first(where: { $0.id == event.giftKey }) {
+                    playIncomingGift(gift)
+                }
+            }
+        } else {
+            seenGiftIds = Set(board.gifts.map(\.id))
+            primedEngage = true
         }
     }
 
@@ -183,11 +245,35 @@ final class LiveViewModel: ObservableObject {
         heat = 0
         giftCount = 0
         heartFlies = []
+        staff = LiveRoomStaff()
+        staffTarget = nil
+    }
+
+    private func applyVoice(_ board: VoiceBoard, fallback: VoiceRoom? = nil) {
+        staff = board.staff
+        if board.staff.banned || board.staff.kicked {
+            voiceRoom = nil
+            voiceSeats = []
+            comments = []
+            canComment = false
+            message = board.staff.banned ? "تم حظرك من هذه الغرفة." : "تم طردك من الغرفة."
+            return
+        }
+        if let fallback {
+            voiceRoom = mergedVoice(board.room, fallback: fallback)
+        } else {
+            voiceRoom = board.room
+        }
+        voiceSeats = board.seats
+        comments = board.comments
+        canComment = board.canComment
+        if let url = voiceRoom?.backdropUrl { backdropUrl = url }
     }
 
     func mine(userId: String?) -> LiveHost? {
         guard let userId, !userId.isEmpty else { return nil }
-        return hosts.first { $0.userId == userId }
+        let me = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return hosts.first { $0.userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == me }
     }
 
     func openWatch(_ host: LiveHost, using client: ZohorAPIClient?, sessionUserId: String?) async {
@@ -200,8 +286,10 @@ final class LiveViewModel: ObservableObject {
         watching = nil
         showGifts = false
         showStore = false
-        showComments = false
+        showChallenge = false
+        showBeauty = false
         commentDraft = ""
+        clearBackdropLocal()
         resetRoomBoard()
     }
 
@@ -212,11 +300,16 @@ final class LiveViewModel: ObservableObject {
 
     func inviteCandidates(followingIds: Set<String>, myUserId: String?) -> [LiveHost] {
         let seated = Set(challenge.seats.compactMap { $0.isEmpty ? nil : $0.userId })
-        return hosts.filter { host in
-            host.userId != myUserId
-                && followingIds.contains(host.userId)
-                && !seated.contains(host.userId)
-        }
+        return hosts
+            .filter { host in
+                host.userId != myUserId && !seated.contains(host.userId)
+            }
+            .sorted { a, b in
+                let followedA = followingIds.contains(a.userId)
+                let followedB = followingIds.contains(b.userId)
+                if followedA != followedB { return followedA && !followedB }
+                return a.shownName.localizedStandardCompare(b.shownName) == .orderedAscending
+            }
     }
 
     func start(using client: ZohorAPIClient?) async -> LiveHost? {
@@ -229,10 +322,13 @@ final class LiveViewModel: ObservableObject {
         defer { isBusy = false }
         do {
             let mine = try await client.startLive()
+            deviceBroadcasting = true
             watching = nil
             showGifts = false
             showStore = false
-            showComments = false
+            showChallenge = false
+            showBeauty = false
+            clearBackdropLocal()
             resetRoomBoard()
             challenge = (try? await client.liveChallengeThrowing(action: "start")) ?? LiveChallenge()
             await load(using: client)
@@ -257,13 +353,11 @@ final class LiveViewModel: ObservableObject {
         defer { isBusy = false }
         do {
             challenge = try await client.liveChallengeThrowing(action: "invite", userId: userId)
-            if let seat = challenge.seats.first(where: { $0.userId == userId }) {
-                selectedSeat = seat.index
-            }
-            message = nil
+            message = "أُرسلت الدعوة — بانتظار القبول."
+            showChallenge = false
             await load(using: client)
         } catch {
-            message = (error as? LocalizedError)?.errorDescription ?? "تعذر استضافة المذيع."
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر دعوة المذيع."
         }
     }
 
@@ -271,7 +365,7 @@ final class LiveViewModel: ObservableObject {
         guard let client else { return }
         do {
             challenge = try await client.liveChallengeThrowing(action: "seek")
-            message = nil
+            message = "بانتظار مذيع يقبل التحدي العشوائي."
         } catch {
             message = (error as? LocalizedError)?.errorDescription ?? "تعذر بدء البحث."
         }
@@ -296,6 +390,13 @@ final class LiveViewModel: ObservableObject {
         }
     }
 
+    func declineIncoming(using client: ZohorAPIClient?) async {
+        guard let client, let incoming = challenge.incoming else { return }
+        challenge.incoming = nil
+        challenge = await client.liveChallenge(action: "decline", challengeId: incoming.challengeId)
+        message = "رفضت الدعوة."
+    }
+
     func tickMatch() {
         if challenge.seekingSeconds > 0 {
             challenge.seekingSeconds -= 1
@@ -305,6 +406,210 @@ final class LiveViewModel: ObservableObject {
             challenge.incoming = next > 0
                 ? LiveIncoming(challengeId: incoming.challengeId, hostUserId: incoming.hostUserId, hostName: incoming.hostName, seconds: next)
                 : nil
+        }
+    }
+
+    func setChallengeMode(_ mode: LiveChallengeMode, using client: ZohorAPIClient?) async {
+        guard let client else { return }
+        do {
+            challenge = try await client.liveChallengeThrowing(action: "set_mode", mode: mode.rawValue)
+            message = nil
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر تغيير وضع التحدي."
+        }
+    }
+
+    func previewBackdrop(_ image: UIImage?) {
+        backdropImage = image
+        if image == nil { backdropUrl = nil }
+    }
+
+    func setBackdrop(_ url: URL?, using client: ZohorAPIClient?) async {
+        guard let client else { return }
+        message = nil
+        if url == nil {
+            backdropImage = nil
+            backdropUrl = nil
+        }
+        do {
+            if voiceRoom != nil {
+                let board = try await client.voiceRoomThrowing(action: "backdrop", backdropUrl: url?.absoluteString ?? "")
+                applyVoice(board, fallback: voiceRoom)
+                backdropUrl = url ?? voiceRoom?.backdropUrl
+            } else {
+                let host = try await client.setLiveBackdrop(url)
+                applyLiveBackdrop(host.backdropUrl ?? url)
+            }
+        } catch {
+            if url != nil, backdropImage != nil {
+                backdropUrl = url
+                message = nil
+            } else {
+                message = (error as? LocalizedError)?.errorDescription ?? "تعذر حفظ الخلفية."
+            }
+        }
+    }
+
+    private func applyLiveBackdrop(_ url: URL?) {
+        backdropUrl = url
+        if url == nil { backdropImage = nil }
+        if var watching {
+            watching.backdropUrl = url
+            self.watching = watching
+        }
+        if let me = sessionUserId, let index = hosts.firstIndex(where: { $0.userId == me }) {
+            hosts[index].backdropUrl = url
+        }
+    }
+
+
+    private func clearBackdropLocal() {
+        backdropUrl = nil
+        backdropImage = nil
+    }
+
+    func setMedia(_ next: LiveMediaMode, using client: ZohorAPIClient?) async {
+        media = next
+        message = nil
+        guard let client else { return }
+        do {
+            let host = try await client.setLiveMedia(next)
+            media = host.media
+            if var watching, watching.userId == host.userId {
+                watching.media = host.media
+                self.watching = watching
+            }
+        } catch {
+            media = next
+        }
+    }
+
+    func openVoice(_ room: VoiceRoom, using client: ZohorAPIClient?) async {
+        guard let client else { return }
+        do {
+            let board = try await client.voiceRoomThrowing(action: "get", hostUserId: room.hostUserId)
+            watching = nil
+            media = .audio
+            applyVoice(board, fallback: room)
+            if voiceRoom != nil { message = nil }
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر دخول الغرفة الصوتية."
+        }
+    }
+
+    func startVoice(using client: ZohorAPIClient?) async -> VoiceRoom? {
+        guard let client else { return nil }
+        do {
+            let board = try await client.voiceRoomThrowing(action: "start")
+            watching = nil
+            media = .audio
+            clearBackdropLocal()
+            applyVoice(board)
+            if voiceRoom != nil { message = nil }
+            return board.room
+        } catch {
+            if (error as NSError).domain == NSURLErrorDomain {
+                message = "تعذر فتح الغرفة الصوتية. السيرفر غير متصل."
+            } else {
+                let text = (error as? LocalizedError)?.errorDescription ?? ""
+                let low = text.lowercased()
+                message = low.contains("sql") ? "تعذر فتح الغرفة الصوتية." : (text.isEmpty ? "تعذر فتح غرفة صوتية." : text)
+            }
+            return nil
+        }
+    }
+
+    func requestVoiceMic(using client: ZohorAPIClient?) async {
+        guard let client, let host = voiceRoom?.hostUserId else { return }
+        do {
+            let board = try await client.voiceRoomThrowing(action: "request_mic", hostUserId: host)
+            applyVoice(board, fallback: voiceRoom)
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر طلب المايك."
+        }
+    }
+
+    func acceptVoiceMic(_ userId: String, using client: ZohorAPIClient?) async {
+        guard let client, let host = voiceRoom?.hostUserId else { return }
+        if voiceSeats.filter(\.canSpeak).count >= VoiceRoomLimit.speakerCap {
+            message = "المتحدثون مكتملون. السقف 14."
+            return
+        }
+        do {
+            let board = try await client.voiceRoomThrowing(action: "accept_mic", hostUserId: host, userId: userId)
+            applyVoice(board, fallback: voiceRoom)
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر قبول المايك."
+        }
+    }
+
+    func sendVoiceComment(using client: ZohorAPIClient?, sessionUserId: String?, displayName: String?) async {
+        guard let client, let host = voiceRoom?.hostUserId else { return }
+        let text = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        commentDraft = ""
+        do {
+            let board = try await client.voiceRoomThrowing(action: "comment", hostUserId: host, text: text)
+            applyVoice(board, fallback: voiceRoom)
+        } catch {
+            commentDraft = text
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر إرسال التعليق."
+        }
+    }
+
+    private func mergedVoice(_ room: VoiceRoom?, fallback: VoiceRoom) -> VoiceRoom {
+        var next = room ?? fallback
+        if next.displayName.isEmpty { next.displayName = fallback.displayName }
+        if next.username.isEmpty { next.username = fallback.username }
+        if next.backdropUrl == nil { next.backdropUrl = fallback.backdropUrl }
+        return next
+    }
+
+    func leaveVoice(using client: ZohorAPIClient?, sessionUserId: String?) async {
+        guard let client else {
+            voiceRoom = nil
+            voiceSeats = []
+            return
+        }
+        if voiceRoom?.hostUserId == sessionUserId {
+            _ = try? await client.voiceRoomThrowing(action: "end")
+        } else if let host = voiceRoom?.hostUserId {
+            _ = try? await client.voiceRoomThrowing(action: "leave", hostUserId: host)
+        }
+        voiceRoom = nil
+        voiceSeats = []
+        comments = []
+        canComment = false
+        staff = LiveRoomStaff()
+        staffTarget = nil
+        clearBackdropLocal()
+    }
+
+    func runStaff(_ action: String, userId: String, using client: ZohorAPIClient?) async {
+        let host = voiceRoom?.hostUserId ?? watching?.userId ?? (deviceBroadcasting ? sessionUserId : nil)
+        guard let client, let host, !host.isEmpty, !userId.isEmpty else { return }
+        do {
+            staff = try await client.moderateRoom(action: action, hostUserId: host, userId: userId)
+            staffTarget = nil
+            if voiceRoom != nil {
+                if let board = try? await client.voiceRoomThrowing(action: "get", hostUserId: host) {
+                    applyVoice(board, fallback: voiceRoom)
+                }
+            } else {
+                await load(using: client, hostUserId: host, sessionUserId: sessionUserId)
+            }
+            switch action {
+            case "appoint": message = "تم تعيين مشرف."
+            case "revoke": message = "أُلغي الإشراف."
+            case "mute": message = "تم الكتم."
+            case "unmute": message = "فُك الكتم."
+            case "kick": message = "تم الطرد. يمكنه العودة."
+            case "ban": message = "تم الحظر."
+            case "unban": message = "أُلغي الحظر."
+            default: break
+            }
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر تنفيذ الإجراء."
         }
     }
 
@@ -324,32 +629,67 @@ final class LiveViewModel: ObservableObject {
             message = "اختر مذيعًا في البث."
             return
         }
+        guard !giftSendInFlight else { return }
+        if coins < gift.coins {
+            showGifts = true
+            showStore = true
+            message = "شحن اللمعات لإرسال الهدية."
+            return
+        }
+        giftSendInFlight = true
+        defer { giftSendInFlight = false }
         do {
-            let sent = try await client.sendLiveGift(giftKey: gift.id, receiverId: receiver, challengeId: challenge.id)
+            let sent = try await client.sendLiveGift(
+                giftKey: gift.id,
+                receiverId: receiver,
+                challengeId: challenge.id,
+                clientNonce: UUID()
+            )
+            guard !sent.giftId.isEmpty else {
+                message = "تعذر إرسال الهدية."
+                coins = await client.liveWallet()
+                return
+            }
             coins = sent.coins
             recentlySentKeys.insert(gift.id)
+            showGifts = true
+            showStore = false
             playIncomingGift(gift)
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
-                showGifts = false
-                showStore = false
-            }
             Task {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 recentlySentKeys.remove(gift.id)
             }
         } catch {
+            coins = await client.liveWallet()
             message = (error as? LocalizedError)?.errorDescription ?? "تعذر إرسال الهدية."
         }
     }
 
     func buyPack(_ pack: LiveCoinPack, using client: ZohorAPIClient?) async {
         guard let client else { return }
+        isBusy = true
+        message = "أكمل الدفع في الصفحة ثم ارجع للتطبيق…"
+        defer { isBusy = false }
         do {
             coins = try await client.buyLiveCoins(packId: pack.id)
-            message = "أُضيفت \(pack.coins) لُمعة إلى رصيدك."
+            message = "تمت إضافة \(pack.coins) لُمعة."
         } catch {
+            if case .cancelled = error as? LiveCoinIAPError { return }
             message = (error as? LocalizedError)?.errorDescription ?? "تعذر شراء الحزمة."
         }
+    }
+
+    func resumePaymob(using client: ZohorAPIClient?) async {
+        guard let client else { return }
+        if let coins = await client.resumePendingPaymobIfNeeded() {
+            self.coins = coins
+            message = "تم تأكيد شحن اللمعات."
+        }
+    }
+
+    func refreshWallet(using client: ZohorAPIClient?) async {
+        guard let client else { return }
+        coins = await client.liveWallet()
     }
 
     func end(using client: ZohorAPIClient?) async {
@@ -362,8 +702,11 @@ final class LiveViewModel: ObservableObject {
         defer { isBusy = false }
         do {
             try await client.endLive()
+            deviceBroadcasting = false
+            showChallenge = false
+            showBeauty = false
+            clearBackdropLocal()
             _ = await client.liveChallenge(action: "leave")
-            showComments = false
             resetRoomBoard()
             await load(using: client)
         } catch {
@@ -374,12 +717,19 @@ final class LiveViewModel: ObservableObject {
 
 struct LiveScreen: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = LiveViewModel()
     @StateObject private var camera = LiveCameraController()
     @StateObject private var agora = LiveAgoraWatcher()
+    @State private var voiceMicJoined = false
+    @State private var backdropItem: PhotosPickerItem?
 
     private var isHosting: Bool {
-        model.mine(userId: appState.session?.userId) != nil
+        model.deviceBroadcasting && model.mine(userId: appState.session?.userId) != nil
+    }
+
+    private var liveOnOtherDevice: Bool {
+        !model.deviceBroadcasting && model.mine(userId: appState.session?.userId) != nil
     }
 
     private var isOwner: Bool {
@@ -391,8 +741,42 @@ struct LiveScreen: View {
         return watching.userId != appState.session?.userId && !isHosting
     }
 
+    private var isVoiceHost: Bool {
+        model.voiceRoom?.hostUserId == appState.session?.userId
+    }
+
+    private var canMuteOwnMic: Bool {
+        isHosting || isVoiceHost
+    }
+
+    private var canChangeBackdrop: Bool {
+        isHosting || isVoiceHost
+    }
+
+    private var roomBackdrop: URL? {
+        model.backdropUrl
+            ?? model.voiceRoom?.backdropUrl
+            ?? model.watching?.backdropUrl
+            ?? model.mine(userId: appState.session?.userId)?.backdropUrl
+    }
+
+    private var hasRoomBackdrop: Bool {
+        model.backdropImage != nil || roomBackdrop != nil
+    }
+
+    private var canSendGift: Bool {
+        if let host = model.voiceRoom?.hostUserId {
+            return host != appState.session?.userId
+        }
+        return isViewer
+    }
+
     private var isLiveRoom: Bool {
         isHosting || isViewer
+    }
+
+    private var inRoom: Bool {
+        isLiveRoom || model.voiceRoom != nil
     }
 
     private var liveFriends: [LiveHost] {
@@ -405,20 +789,51 @@ struct LiveScreen: View {
         }
     }
 
+    private var stageSeats: [LiveSeat] {
+        model.challenge.seats
+    }
+
+    private var voicePlaces: [VoicePlace] {
+        guard let room = model.voiceRoom else { return [] }
+        let host = model.voiceSeats.first(where: { $0.role == "host" })
+            ?? VoiceSeat(userId: room.hostUserId, role: "host", username: room.username, displayName: room.displayName)
+        let guests = model.voiceSeats.filter { $0.role == "speaker" }
+        return (0..<VoiceRoomLimit.speakerCap).map { index in
+            if index == 0 { return VoicePlace(index: index, seat: host) }
+            let guest = guests.indices.contains(index - 1) ? guests[index - 1] : nil
+            return VoicePlace(index: index, seat: guest)
+        }
+    }
+
     private var headerSubtitle: String {
+        if model.voiceRoom != nil {
+            return model.voiceRoom?.hostUserId == appState.session?.userId ? "غرفة صوتية" : ""
+        }
+        if liveOnOtherDevice {
+            return "هذا الحساب يبث من جهاز آخر"
+        }
         if isHosting {
             return "أنت على الهواء"
         }
         if isViewer {
             return ""
         }
-        if !watchableLives.isEmpty {
+        if !watchableLives.isEmpty || !model.voiceRooms.isEmpty {
             return "بثوث قائمة — اضغط الاسم للدخول"
         }
         return "ابدأ بثك أو ادخل بثًا مباشرًا"
     }
 
     private var roomIdentityName: String {
+        if let voice = model.voiceRoom {
+            if voice.hostUserId == appState.session?.userId {
+                return IdentityLabel.roomShown(
+                    displayName: appState.profile?.displayName,
+                    username: appState.profile?.username ?? ""
+                )
+            }
+            return voice.shownName
+        }
         if isHosting {
             return IdentityLabel.shown(
                 displayName: appState.profile?.displayName,
@@ -429,8 +844,156 @@ struct LiveScreen: View {
     }
 
     private var roomIdentityAvatar: URL? {
+        if let voice = model.voiceRoom {
+            if voice.hostUserId == appState.session?.userId { return appState.profile?.avatarUrl }
+            return model.voiceSeats.first(where: { $0.userId == voice.hostUserId })?.avatarUrl
+        }
         if isHosting { return appState.profile?.avatarUrl }
         return model.watching?.avatarUrl
+    }
+
+    private var hostBackdropChip: some View {
+        PhotosPicker(selection: $backdropItem, matching: .images) {
+            Text("خلفية")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(hasRoomBackdrop ? Color.black : .white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: true)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(hasRoomBackdrop ? ZohorTheme.gold : Color.black.opacity(0.46), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("خلفية من الاستوديو")
+        .contextMenu {
+            if hasRoomBackdrop {
+                Button("إزالة الخلفية") {
+                    Task { await model.setBackdrop(nil, using: appState.apiClient) }
+                }
+            }
+        }
+    }
+
+    private var hostMicChip: some View {
+        LiveRoomChip(title: agora.micMuted ? "صوت" : "كتم", emphasis: agora.micMuted) {
+            agora.toggleMic()
+        }
+        .accessibilityLabel(agora.micMuted ? "تشغيل المايك" : "كتم المايك")
+    }
+
+    private var canUseBeauty: Bool {
+        isHosting && model.media == .video && model.voiceRoom == nil
+    }
+
+    private var hostBeautyChip: some View {
+        LiveRoomChip(title: "تجميل", emphasis: model.showBeauty || agora.beauty != .off) {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                model.showGifts = false
+                model.showStore = false
+                model.showChallenge = false
+                model.showBeauty.toggle()
+            }
+        }
+        .accessibilityLabel("تجميل الكاميرا")
+    }
+
+
+    private var liveCommentField: some View {
+        HStack(spacing: 8) {
+            TextField("اكتب تعليقًا", text: $model.commentDraft)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(ZohorTheme.ink)
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(ZohorTheme.surfaceRaised, in: Capsule())
+                .onSubmit {
+                    Task { await sendLiveComment() }
+                }
+            Button("إرسال") {
+                Task { await sendLiveComment() }
+            }
+            .font(.caption.weight(.bold))
+            .foregroundStyle(model.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ZohorTheme.inkMuted : ZohorTheme.gold)
+            .disabled(model.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .frame(maxWidth: 220)
+    }
+
+    @ViewBuilder
+    private func staffMenuButtons(userId: String, name: String) -> some View {
+        if model.staff.isHost {
+            if model.staff.isModeratorId(userId) {
+                Button("إلغاء إشراف \(name)") {
+                    Task { await model.runStaff("revoke", userId: userId, using: appState.apiClient) }
+                }
+            } else {
+                Button("تعيين \(name) مشرفًا") {
+                    Task { await model.runStaff("appoint", userId: userId, using: appState.apiClient) }
+                }
+            }
+        }
+        if model.staff.isMutedId(userId) {
+            Button("فك كتم \(name)") {
+                Task { await model.runStaff("unmute", userId: userId, using: appState.apiClient) }
+            }
+        } else {
+            Button("كتم \(name)") {
+                Task { await model.runStaff("mute", userId: userId, using: appState.apiClient) }
+            }
+        }
+        Button("طرد \(name)") {
+            Task { await model.runStaff("kick", userId: userId, using: appState.apiClient) }
+        }
+        Button("حظر \(name)", role: .destructive) {
+            Task { await model.runStaff("ban", userId: userId, using: appState.apiClient) }
+        }
+    }
+
+    private func applyStudioBackdrop(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data),
+              let jpeg = Self.backdropJPEG(image)
+        else {
+            model.message = "تعذر قراءة الصورة."
+            return
+        }
+        model.previewBackdrop(image)
+        guard let client = appState.apiClient else { return }
+        do {
+            let url = try await client.uploadMomentMedia(data: jpeg, filename: "backdrop.jpg", mimeType: "image/jpeg")
+            await model.setBackdrop(url, using: client)
+        } catch {
+            model.message = (error as? LocalizedError)?.errorDescription ?? "تعذر رفع الخلفية."
+        }
+    }
+
+    private static func backdropJPEG(_ image: UIImage) -> Data? {
+        let maxSide: CGFloat = 1600
+        let size = image.size
+        let longest = max(size.width, size.height)
+        let scale = longest > maxSide ? maxSide / longest : 1
+        let bounds = CGSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
+        let rendered = UIGraphicsImageRenderer(size: bounds).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: bounds))
+        }
+        return rendered.jpegData(compressionQuality: 0.78)
+    }
+
+    private func sendLiveComment() async {
+        if model.voiceRoom != nil {
+            await model.sendVoiceComment(
+                using: appState.apiClient,
+                sessionUserId: appState.session?.userId,
+                displayName: appState.profile?.displayName
+            )
+        } else {
+            await model.sendComment(
+                using: appState.apiClient,
+                sessionUserId: appState.session?.userId,
+                displayName: appState.profile?.displayName
+            )
+        }
     }
 
     var body: some View {
@@ -448,9 +1011,11 @@ struct LiveScreen: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if isLiveRoom, !roomIdentityName.isEmpty {
+                if (isLiveRoom || model.voiceRoom != nil), !roomIdentityName.isEmpty {
                     HStack(spacing: 8) {
-                        LiveHeatFlame(heat: model.heat)
+                        if model.voiceRoom == nil {
+                            LiveHeatFlame(heat: model.heat)
+                        }
                         Text(roomIdentityName)
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(ZohorTheme.ink)
@@ -480,8 +1045,20 @@ struct LiveScreen: View {
             }
 
             ZStack(alignment: .bottom) {
+                Group {
+                if model.voiceRoom != nil {
+                    VoiceRoomFloor(
+                        places: voicePlaces,
+                        backdropUrl: roomBackdrop,
+                        backdropImage: model.backdropImage,
+                        canModerate: model.staff.canModerate,
+                        onStaff: { seat in
+                            model.staffTarget = LiveStaffPerson(id: seat.userId, name: seat.shownName)
+                        }
+                    )
+                } else {
                 LiveHostStage(
-                    seats: model.challenge.seats,
+                    seats: stageSeats,
                     selectedSeat: model.selectedSeat,
                     myUserId: appState.session?.userId,
                     isOwner: isOwner,
@@ -496,27 +1073,34 @@ struct LiveScreen: View {
                     remoteVideo: isViewer,
                     agora: agora,
                     camera: camera,
-                    flyingGift: model.flyingGift,
+                    flyingGift: nil,
+                    backdropUrl: roomBackdrop,
+                    backdropImage: model.backdropImage,
                     roomWash: model.roomWash,
-                    giftCount: model.giftCount,
+                    audioOnly: model.media == .audio || model.voiceRoom != nil,
+                    mode: model.voiceRoom == nil ? model.challenge.mode : .duel,
+                    teamA: model.voiceRoom == nil ? model.challenge.teamA : 0,
+                    teamB: model.voiceRoom == nil ? model.challenge.teamB : 0,
                     heartFlies: model.heartFlies,
                     onSelect: { seat in
                         model.selectedSeat = seat
-                        if isViewer {
-                            Task { await model.sendHeart(using: appState.apiClient, sessionUserId: appState.session?.userId) }
-                        }
+                        Task { await model.load(using: appState.apiClient, sessionUserId: appState.session?.userId) }
                     },
                     onUninvite: { userId in
                         Task { await model.uninvite(userId, using: appState.apiClient) }
                     },
                     onRetryCamera: { camera.start() }
                 )
+                }
+                }
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if model.showGifts || model.showStore {
+                    if model.showGifts || model.showStore || model.showChallenge || model.showBeauty {
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
                             model.showGifts = false
                             model.showStore = false
+                            model.showChallenge = false
+                            model.showBeauty = false
                         }
                         return
                     }
@@ -527,7 +1111,10 @@ struct LiveScreen: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     if let incoming = model.challenge.incoming, isHosting, !model.challenge.isSeeking {
                         HStack(spacing: 8) {
-                            LiveRoomChip(title: "قبول \(incoming.seconds)") {
+                            LiveRoomChip(title: "رفض") {
+                                Task { await model.declineIncoming(using: appState.apiClient) }
+                            }
+                            LiveRoomChip(title: "قبول \(incoming.seconds)", emphasis: true) {
                                 Task { await model.acceptIncoming(using: appState.apiClient) }
                             }
                             Text("تحدٍ من \(incoming.hostName)")
@@ -538,22 +1125,40 @@ struct LiveScreen: View {
                         .padding(.top, 10)
                     }
 
-                    if !isHosting && !isViewer && !watchableLives.isEmpty {
+                    if !isHosting && !isViewer && model.voiceRoom == nil && !watchableLives.isEmpty {
                         liveNameChips(watchableLives) { host in
                             Task { await model.openWatch(host, using: appState.apiClient, sessionUserId: appState.session?.userId) }
                         }
                         .padding(.top, 10)
                     }
-
-                    Spacer(minLength: 0)
-
-                    if isHosting && !liveFriends.isEmpty {
-                        liveNameChips(liveFriends) { host in
-                            Task { await model.invite(host.userId, using: appState.apiClient) }
+                    if !isHosting && !isViewer && model.voiceRoom == nil && !model.voiceRooms.isEmpty {
+                        liveNameChips(model.voiceRooms.map { room in
+                            LiveHost(
+                                id: room.id,
+                                userId: room.hostUserId,
+                                username: room.username,
+                                displayName: room.displayName,
+                                channel: room.channel,
+                                media: .audio
+                            )
+                        }) { host in
+                            if let room = model.voiceRooms.first(where: { $0.hostUserId == host.userId }) {
+                                Task {
+                                    await model.openVoice(room, using: appState.apiClient)
+                                    if let channel = model.voiceRoom?.channel, !channel.isEmpty,
+                                       let client = appState.apiClient,
+                                       let join = try? await client.agoraJoin(channel: channel, role: "audience") {
+                                        agora.watch(appId: join.appId, token: join.token, channel: channel, uid: join.uid, audioOnly: true)
+                                        voiceMicJoined = false
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    if isViewer {
+                    Spacer(minLength: 0)
+
+                    if canSendGift {
                         HStack(spacing: 8) {
                             Button {
                                 withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
@@ -578,13 +1183,39 @@ struct LiveScreen: View {
                 }
                 .padding(.bottom, 10)
 
-                if isViewer && (model.showGifts || model.showStore) {
+                if inRoom {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                        LiveCommentRail(
+                            comments: model.comments,
+                            hostUserId: model.voiceRoom?.hostUserId ?? model.watching?.userId ?? "",
+                            myUserId: appState.session?.userId ?? "",
+                            staff: model.staff,
+                            onStaff: { comment in
+                                model.staffTarget = LiveStaffPerson(id: comment.userId, name: comment.shownName)
+                            }
+                        )
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                }
+
+                if let gift = model.flyingGift {
+                    LiveGiftFlight(gift: gift)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.bottom, !isHosting && (model.showGifts || model.showStore) ? 252 : 88)
+                        .allowsHitTesting(false)
+                }
+
+                if !isHosting && (model.showGifts || model.showStore) {
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                             .allowsHitTesting(false)
                         LiveGiftTray(
                             coins: model.coins,
-                            showsStore: model.showStore,
+                            showsStore: model.showStore || !isViewer,
+                            allowsGifts: canSendGift,
                             onClose: {
                                 withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
                                     model.showGifts = false
@@ -609,110 +1240,201 @@ struct LiveScreen: View {
                     }
                     .padding(.bottom, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(2)
+                }
+
+                if isHosting && isOwner && model.showChallenge {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                        LiveInviteSheet(
+                            people: liveFriends,
+                            followingIds: appState.followingIds,
+                            mode: model.challenge.mode,
+                            isBusy: model.isBusy,
+                            isSeeking: model.challenge.isSeeking,
+                            seekingSeconds: model.challenge.seekingSeconds,
+                            remaining: max(0, model.challenge.capacity - model.challenge.seatedCount),
+                            onClose: {
+                                withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                                    model.showChallenge = false
+                                }
+                            },
+                            onMode: { mode in
+                                Task { await model.setChallengeMode(mode, using: appState.apiClient) }
+                            },
+                            onRandom: {
+                                Task { await model.seekRandom(using: appState.apiClient) }
+                            },
+                            onInvite: { host in
+                                Task { await model.invite(host.userId, using: appState.apiClient) }
+                            }
+                        )
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(3)
+                }
+
+                if canUseBeauty && model.showBeauty {
+                    VStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                            .allowsHitTesting(false)
+                        LiveBeautyTray(
+                            selected: agora.beauty,
+                            onClose: {
+                                withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                                    model.showBeauty = false
+                                }
+                            },
+                            onPick: { look in
+                                agora.setBeauty(look)
+                            }
+                        )
+                    }
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(3)
                 }
             }
             .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.showGifts)
             .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.showStore)
-            .padding(.horizontal, 16)
-            .padding(.top, ZohorTheme.space12)
+            .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.showChallenge)
+            .animation(.spring(response: 0.42, dampingFraction: 0.88), value: model.showBeauty)
+            .animation(.easeInOut(duration: 0.25), value: agora.beauty)
+            .padding(.horizontal, inRoom ? 0 : 16)
+            .padding(.top, inRoom ? 0 : ZohorTheme.space12)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if isLiveRoom && model.showComments {
-                LiveCommentRail(comments: model.comments)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .frame(maxHeight: 132)
-                if isViewer {
-                    HStack(spacing: 8) {
-                        TextField("اكتب تعليقًا", text: $model.commentDraft)
-                            .textFieldStyle(.plain)
-                            .font(.subheadline)
-                            .foregroundStyle(ZohorTheme.ink)
-                            .padding(.horizontal, 12)
-                            .frame(height: 36)
-                            .background(ZohorTheme.surfaceRaised, in: Capsule())
-                            .onSubmit {
-                                Task {
-                                    await model.sendComment(
-                                        using: appState.apiClient,
-                                        sessionUserId: appState.session?.userId,
-                                        displayName: appState.profile?.displayName
-                                    )
-                                }
+            if model.voiceRoom != nil {
+                HStack(spacing: 8) {
+                    if model.staff.canModerate {
+                        let speakersFull = model.voiceSeats.filter(\.canSpeak).count >= VoiceRoomLimit.speakerCap
+                        ForEach(model.voiceSeats.filter { $0.role == "waiting" }) { seat in
+                            LiveRoomChip(title: speakersFull ? "السقف 14" : "قبول \(seat.shownName)") {
+                                Task { await model.acceptVoiceMic(seat.userId, using: appState.apiClient) }
                             }
-                        Button("إرسال") {
-                            Task {
-                                await model.sendComment(
-                                    using: appState.apiClient,
-                                    sessionUserId: appState.session?.userId,
-                                    displayName: appState.profile?.displayName
-                                )
+                            .contextMenu {
+                                staffMenuButtons(userId: seat.userId, name: seat.shownName)
                             }
                         }
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(model.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? ZohorTheme.inkMuted : ZohorTheme.gold)
-                        .disabled(model.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                }
-            }
-
-            if isHosting {
-                HStack(spacing: 8) {
-                    if isOwner && model.challenge.seatedCount < 4 {
-                        if model.challenge.isSeeking {
-                            Button {
-                                Task { await model.cancelSeek(using: appState.apiClient) }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "hourglass")
-                                    Text("\(model.challenge.seekingSeconds)")
-                                }
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(ZohorTheme.ink)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(ZohorTheme.goldSoft.opacity(0.9), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("جارٍ البحث عن تحدٍ")
-                        } else {
-                            LiveRoomChip(title: "عشوائي") {
-                                Task { await model.seekRandom(using: appState.apiClient) }
-                            }
+                    } else if !model.staff.muted {
+                        LiveRoomChip(title: "طلب مايك") {
+                            Task { await model.requestVoiceMic(using: appState.apiClient) }
                         }
                     }
                     Spacer(minLength: 0)
-                    LiveRoomChip(title: "تعليقات", emphasis: model.showComments) {
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
-                            model.showComments.toggle()
-                        }
+                    if model.canComment {
+                        liveCommentField
                     }
-                    LiveRoomChip(title: model.isBusy ? "جارٍ الإنهاء" : "إنهاء", emphasis: true) {
-                        camera.stop()
+                    if canChangeBackdrop {
+                        hostBackdropChip
+                    }
+                    if canMuteOwnMic {
+                        hostMicChip
+                    }
+                    LiveRoomChip(title: "خروج", emphasis: true) {
                         agora.stop()
-                        Task { await model.end(using: appState.apiClient) }
+                        voiceMicJoined = false
+                        Task { await model.leaveVoice(using: appState.apiClient, sessionUserId: appState.session?.userId) }
                     }
-                    .disabled(model.isBusy)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
+            } else if isHosting {
+                HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        if isOwner {
+                            if model.challenge.isSeeking {
+                                LiveRoomChip(title: "إلغاء \(model.challenge.seekingSeconds)", emphasis: true) {
+                                    Task { await model.cancelSeek(using: appState.apiClient) }
+                                }
+                            } else {
+                                LiveRoomChip(title: "تحدي", emphasis: model.showChallenge) {
+                                    withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                                        model.showGifts = false
+                                        model.showStore = false
+                                        model.showBeauty = false
+                                        model.showChallenge.toggle()
+                                    }
+                                }
+                            }
+                        }
+                        if canChangeBackdrop {
+                            hostBackdropChip
+                        }
+                        if canUseBeauty {
+                            hostBeautyChip
+                        }
+                        if canMuteOwnMic {
+                            hostMicChip
+                        }
+                        LiveRoomChip(title: model.media == .audio ? "كاميرا" : "صوتي") {
+                            Task {
+                                let next: LiveMediaMode = model.media == .audio ? .video : .audio
+                                if next == .audio {
+                                    model.showBeauty = false
+                                    agora.setBeauty(.off)
+                                }
+                                await model.setMedia(next, using: appState.apiClient)
+                                agora.applyMedia(audioOnly: model.media == .audio, publishMic: true)
+                                if model.media == .audio {
+                                    camera.stop()
+                                } else {
+                                    camera.start()
+                                }
+                            }
+                        }
+                        if model.canComment {
+                            liveCommentField
+                        }
+                        LiveRoomChip(title: model.isBusy ? "جارٍ الإنهاء" : "إنهاء", emphasis: true) {
+                            camera.stop()
+                            agora.stop()
+                            appState.isBroadcasting = false
+                            Task { await model.end(using: appState.apiClient) }
+                        }
+                        .disabled(model.isBusy)
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
                 .padding(.bottom, 12)
             } else if !isViewer {
                 HStack(spacing: 8) {
+                    LiveRoomChip(title: model.showStore ? "إخفاء الشحن" : "✦ \(model.coins)", emphasis: model.showStore) {
+                        Task {
+                            await model.refreshWallet(using: appState.apiClient)
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                                model.showGifts = false
+                                model.showStore.toggle()
+                            }
+                        }
+                    }
                     Spacer(minLength: 0)
+                    LiveRoomChip(title: "غرفة صوت") {
+                        Task {
+                            guard let room = await model.startVoice(using: appState.apiClient),
+                                  let client = appState.apiClient,
+                                  let join = try? await client.agoraJoin(channel: room.channel, role: "host")
+                            else { return }
+                            agora.host(appId: join.appId, token: join.token, channel: room.channel, uid: join.uid, audioOnly: true)
+                            voiceMicJoined = true
+                        }
+                    }
                     LiveRoomChip(title: model.isBusy ? "جارٍ البدء" : "بدء البث", emphasis: true) {
                         Task {
                             guard let mine = await model.start(using: appState.apiClient),
                                   let client = appState.apiClient,
                                   let join = try? await client.agoraJoin(channel: mine.channel, role: "host")
                             else { return }
+                            appState.isBroadcasting = true
                             agora.host(
                                 appId: join.appId,
                                 token: join.token,
                                 channel: mine.channel,
-                                uid: join.uid
+                                uid: join.uid,
+                                audioOnly: false
                             )
                         }
                     }
@@ -723,9 +1445,21 @@ struct LiveScreen: View {
                 .padding(.bottom, 12)
             } else {
                 HStack(spacing: 8) {
-                    LiveRoomChip(title: "تعليقات", emphasis: model.showComments) {
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
-                            model.showComments.toggle()
+                    if model.canComment {
+                        liveCommentField
+                    }
+                    LiveRoomChip(title: model.showStore ? "الهدايا" : "✦ \(model.coins)", emphasis: model.showStore) {
+                        Task {
+                            await model.refreshWallet(using: appState.apiClient)
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                                if model.showStore {
+                                    model.showStore = false
+                                    model.showGifts = true
+                                } else {
+                                    model.showGifts = true
+                                    model.showStore = true
+                                }
+                            }
                         }
                     }
                     Spacer(minLength: 0)
@@ -739,12 +1473,35 @@ struct LiveScreen: View {
                 .padding(.bottom, 12)
             }
         }
-        .frame(maxWidth: ZohorTheme.contentMaxWidth)
+        .frame(maxWidth: inRoom ? .infinity : ZohorTheme.contentMaxWidth)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .confirmationDialog(model.staffTarget?.name ?? "إجراء", isPresented: Binding(
+            get: { model.staffTarget != nil },
+            set: { if !$0 { model.staffTarget = nil } }
+        ), titleVisibility: .visible) {
+            if let person = model.staffTarget {
+                staffMenuButtons(userId: person.id, name: person.name)
+            }
+        }
+        .onChange(of: backdropItem) { _, item in
+            guard let item else { return }
+            Task {
+                await applyStudioBackdrop(item)
+                backdropItem = nil
+            }
+        }
+        .onChange(of: inRoom) { _, value in
+            appState.liveImmersed = value
+            UIApplication.shared.isIdleTimerDisabled = value || appState.isBroadcasting
+            if !value {
+                agora.stop()
+                voiceMicJoined = false
+            }
+        }
         .task {
             await appState.prepareSession()
             await model.load(using: appState.apiClient, sessionUserId: appState.session?.userId)
-            if isHosting {
+            if isHosting && model.media != .audio {
                 camera.start()
             }
             var ticks = 0
@@ -758,26 +1515,73 @@ struct LiveScreen: View {
             }
         }
         .onChange(of: isHosting) { _, hosting in
+            appState.isBroadcasting = hosting
+            UIApplication.shared.isIdleTimerDisabled = hosting || inRoom
             if hosting {
                 model.showGifts = false
                 model.showStore = false
-                camera.start()
+                model.showChallenge = false
+                model.showBeauty = false
+                if model.media == .audio {
+                    camera.stop()
+                } else {
+                    camera.start()
+                }
             } else {
                 camera.stop()
             }
+        }
+        .onChange(of: model.media) { _, media in
+            if isHosting {
+                agora.applyMedia(audioOnly: media == .audio, publishMic: true)
+                if media == .audio {
+                    camera.stop()
+                } else {
+                    camera.start()
+                }
+            } else if isViewer {
+                agora.applyMedia(audioOnly: media == .audio, publishMic: false)
+            }
+        }
+        .onChange(of: model.voiceSeats.map(\.id)) { _, _ in
+            guard !voiceMicJoined,
+                  let me = appState.session?.userId,
+                  let room = model.voiceRoom,
+                  room.hostUserId != me,
+                  model.voiceSeats.contains(where: { $0.userId == me && $0.canSpeak })
+            else { return }
+            voiceMicJoined = true
+            Task {
+                guard let client = appState.apiClient,
+                      let join = try? await client.agoraJoin(channel: room.channel, role: "host")
+                else {
+                    await MainActor.run { voiceMicJoined = false }
+                    return
+                }
+                agora.host(appId: join.appId, token: join.token, channel: room.channel, uid: join.uid, audioOnly: true)
+            }
+        }
+        .onAppear {
+            appState.isBroadcasting = isHosting
+            appState.liveImmersed = inRoom
+            UIApplication.shared.isIdleTimerDisabled = inRoom || isHosting
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await model.resumePaymob(using: appState.apiClient) }
         }
         .task(id: "\(isHosting)-\(model.mine(userId: appState.session?.userId)?.channel ?? "")-\(model.watching?.channel ?? "")") {
             if isHosting, let channel = model.mine(userId: appState.session?.userId)?.channel, !channel.isEmpty, let client = appState.apiClient {
                 do {
                     let join = try await client.agoraJoin(channel: channel, role: "host")
-                    agora.host(appId: join.appId, token: join.token, channel: channel, uid: join.uid)
+                    agora.host(appId: join.appId, token: join.token, channel: channel, uid: join.uid, audioOnly: model.media == .audio)
                 } catch {
                     agora.stop()
                 }
             } else if isViewer, let channel = model.watching?.channel, !channel.isEmpty, let client = appState.apiClient {
                 do {
                     let join = try await client.agoraJoin(channel: channel)
-                    agora.watch(appId: join.appId, token: join.token, channel: channel, uid: join.uid)
+                    agora.watch(appId: join.appId, token: join.token, channel: channel, uid: join.uid, audioOnly: model.watching?.isAudio == true)
                 } catch {
                     agora.stop()
                 }
@@ -788,6 +1592,13 @@ struct LiveScreen: View {
         .onDisappear {
             agora.stop()
             camera.stop()
+            appState.liveImmersed = false
+            if !isHosting {
+                appState.isBroadcasting = false
+            }
+            if !appState.isBroadcasting {
+                UIApplication.shared.isIdleTimerDisabled = false
+            }
         }
     }
 
@@ -924,25 +1735,54 @@ private struct LiveGoldCircle: View {
 
 private struct LiveCommentRail: View {
     let comments: [LiveComment]
+    var hostUserId = ""
+    var myUserId = ""
+    var staff = LiveRoomStaff()
+    var onStaff: (LiveComment) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            ForEach(Array(comments.suffix(6))) { comment in
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(comment.shownName.isEmpty ? "مشاهد" : comment.shownName)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(ZohorTheme.gold)
-                    Text(comment.text)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.trailing)
+        ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .trailing, spacing: 5) {
+                    ForEach(comments) { comment in
+                        let name = comment.shownName.isEmpty ? "مشاهد" : comment.shownName
+                        let badge = staff.isModeratorId(comment.userId) ? " · مشرف" : ""
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text(name + badge)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(ZohorTheme.gold)
+                            Text(comment.text)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.white)
+                                .multilineTextAlignment(.trailing)
+                                .lineLimit(2)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.black.opacity(0.52), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .id(comment.id)
+                        .onLongPressGesture {
+                            guard staff.canModerate else { return }
+                            guard comment.userId != hostUserId, comment.userId != myUserId else { return }
+                            onStaff(comment)
+                        }
+                    }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(Color.black.opacity(0.52), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .frame(width: 220, height: 108, alignment: .bottom)
+            .onAppear { scrollToLatest(proxy) }
+            .onChange(of: comments.count) { _, _ in scrollToLatest(proxy) }
+        }
+    }
+
+    private func scrollToLatest(_ proxy: ScrollViewProxy) {
+        guard let last = comments.last else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
-        .frame(maxWidth: 260, alignment: .trailing)
     }
 }
 
@@ -1049,11 +1889,93 @@ private struct LiveRoomChip: View {
             Text(title)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(emphasis ? Color.black : .white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(emphasis ? ZohorTheme.gold : Color.black.opacity(0.46), in: Capsule())
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: true)
+    }
+}
+
+
+private struct VoicePlace: Identifiable, Equatable {
+    let index: Int
+    var seat: VoiceSeat?
+    var id: Int { index }
+    var isHost: Bool { index == 0 }
+}
+
+private struct VoiceRoomFloor: View {
+    let places: [VoicePlace]
+    var backdropUrl: URL? = nil
+    var backdropImage: UIImage? = nil
+    var canModerate = false
+    var onStaff: (VoiceSeat) -> Void = { _ in }
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+
+    var body: some View {
+        ZStack {
+            MediaStageFrame(backdropUrl: backdropUrl, backdropImage: backdropImage)
+            LazyVGrid(columns: columns, spacing: 14) {
+                ForEach(places) { place in
+                    voiceSlot(place)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 18)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ZohorTheme.radiusMedia, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("مقاعد الغرفة الصوتية")
+    }
+
+    @ViewBuilder
+    private func voiceSlot(_ place: VoicePlace) -> some View {
+        let seat = place.seat
+        let filled = seat != nil
+        let title: String = {
+            if place.isHost { return "صاحب الغرفة" }
+            if let seat { return seat.shownName }
+            return "مكان"
+        }()
+        VStack(spacing: 6) {
+            ZStack {
+                Circle()
+                    .strokeBorder(
+                        filled ? ZohorTheme.gold.opacity(0.55) : Color.white.opacity(0.22),
+                        style: StrokeStyle(lineWidth: 1.2, dash: filled ? [] : [4, 3])
+                    )
+                    .background(Circle().fill(Color.black.opacity(0.28)))
+                    .frame(width: 58, height: 58)
+                if let seat {
+                    PersonPhoto(
+                        url: seat.avatarUrl,
+                        name: title,
+                        size: 52,
+                        fill: ZohorTheme.goldSoft.opacity(0.32),
+                        ink: .white
+                    )
+                } else {
+                    Image(systemName: "mic")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.28))
+                }
+            }
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(filled ? .white : Color.white.opacity(0.42))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .accessibilityLabel(place.isHost ? "صاحب الغرفة" : (filled ? title : "مكان فارغ"))
+        .onLongPressGesture {
+            guard canModerate, !place.isHost, let seat else { return }
+            onStaff(seat)
+        }
     }
 }
 
@@ -1072,8 +1994,14 @@ private struct LiveHostStage: View {
     @ObservedObject var agora: LiveAgoraWatcher
     @ObservedObject var camera: LiveCameraController
     let flyingGift: LiveGiftItem?
+    var backdropUrl: URL? = nil
+    var backdropImage: UIImage? = nil
     var roomWash = false
     var giftCount = 0
+    var audioOnly = false
+    var mode: LiveChallengeMode = .duel
+    var teamA = 0
+    var teamB = 0
     var heartFlies: [LiveHeartFly] = []
     let onSelect: (Int) -> Void
     let onUninvite: (String) -> Void
@@ -1108,7 +2036,32 @@ private struct LiveHostStage: View {
 
     var body: some View {
         ZStack {
-            stage
+            if occupied.count > 1 {
+                stageFill
+            }
+            if occupied.isEmpty {
+                emptyPreview
+            } else if occupied.count == 1 {
+                pane(occupied[0])
+            } else {
+                GeometryReader { geo in
+                    let teamH: CGFloat = mode == .twovstwo ? 26 : 0
+                    let pad: CGFloat = 10
+                    let board = CGSize(
+                        width: max(160, geo.size.width - pad * 2),
+                        height: max(220, geo.size.height - pad * 2 - teamH)
+                    )
+                    VStack(spacing: 8) {
+                        if mode == .twovstwo {
+                            teamBar
+                        }
+                        stageBoard(in: board)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .padding(pad)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                }
+            }
             if roomWash {
                 RadialGradient(
                     colors: [Color(red: 1.0, green: 0.82, blue: 0.38).opacity(0.34), .clear],
@@ -1138,39 +2091,105 @@ private struct LiveHostStage: View {
         .animation(.easeInOut(duration: 0.24), value: occupied.map(\.userId))
     }
 
+    private var teamBar: some View {
+        let total = max(1, teamA + teamB)
+        return HStack(spacing: 10) {
+            Text("أ \(teamA)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(ZohorTheme.ink)
+                .accessibilityLabel("فريق أ \(teamA)")
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(ZohorTheme.gold.opacity(0.18))
+                    Capsule()
+                        .fill(ZohorTheme.gold)
+                        .frame(width: geo.size.width * CGFloat(teamA) / CGFloat(total))
+                }
+            }
+            .frame(height: 8)
+            Text("ب \(teamB)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(ZohorTheme.ink)
+                .accessibilityLabel("فريق ب \(teamB)")
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
+    }
+
     @ViewBuilder
-    private var stage: some View {
+    private func stageBoard(in size: CGSize) -> some View {
         let people = occupied
         switch people.count {
-        case 0:
-            emptyPreview
-        case 1:
-            pane(people[0])
         case 2:
-            HStack(spacing: 8) {
+            let tile = duelTile(in: size)
+            HStack(spacing: 10) {
                 pane(people[0])
+                    .frame(width: tile.width, height: tile.height)
                 pane(people[1])
+                    .frame(width: tile.width, height: tile.height)
             }
+            .overlay {
+                Text("VS")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(ZohorTheme.gold)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.62), in: Capsule())
+                    .allowsHitTesting(false)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case 3:
-            VStack(spacing: 8) {
+            let tile = gridTile(in: size, rows: 2)
+            VStack(spacing: 10) {
                 pane(people[0])
-                HStack(spacing: 8) {
+                    .frame(width: min(size.width, tile.width * 2 + 10), height: tile.height)
+                HStack(spacing: 10) {
                     pane(people[1])
+                        .frame(width: tile.width, height: tile.height)
                     pane(people[2])
+                        .frame(width: tile.width, height: tile.height)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         default:
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
+            let tile = gridTile(in: size, rows: 2)
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
                     pane(people[0])
+                        .frame(width: tile.width, height: tile.height)
                     pane(people[1])
+                        .frame(width: tile.width, height: tile.height)
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     pane(people[2])
+                        .frame(width: tile.width, height: tile.height)
                     pane(people[3])
+                        .frame(width: tile.width, height: tile.height)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func duelTile(in size: CGSize) -> CGSize {
+        let gap: CGFloat = 10
+        let maxWidth = max(132, (size.width - gap) / 2)
+        // بطاقة عمودية متوازنة (~3:4) لا عمود ممطوط ولا مربع صغير أعلى الشاشة
+        let byWidth = maxWidth * 1.32
+        let byStage = size.height * 0.62
+        let height = min(byWidth, byStage)
+        let width = min(maxWidth, height / 1.28)
+        return CGSize(width: width, height: max(210, height))
+    }
+
+    private func gridTile(in size: CGSize, rows: CGFloat) -> CGSize {
+        let gap: CGFloat = 10
+        let maxWidth = max(132, (size.width - gap) / 2)
+        let byWidth = maxWidth * 1.12
+        let byStage = (size.height - gap * (rows - 1)) / rows * 0.92
+        let height = min(byWidth, byStage)
+        let width = min(maxWidth, height / 1.08)
+        return CGSize(width: width, height: max(150, height))
     }
 
     private var emptyPreview: some View {
@@ -1190,38 +2209,57 @@ private struct LiveHostStage: View {
         .clipShape(RoundedRectangle(cornerRadius: ZohorTheme.radiusMedia, style: .continuous))
     }
 
+    private var hasBackdrop: Bool {
+        backdropImage != nil || backdropUrl != nil
+    }
+
+    private var stageFill: some View {
+        MediaStageFrame(backdropUrl: backdropUrl, backdropImage: backdropImage)
+    }
+
     @ViewBuilder
     private var watchSurface: some View {
         ZStack {
-            MediaStageFrame()
-            LiveAgoraCanvas(view: agora.canvas)
-                .opacity(remoteVideo ? 1 : 0)
+            stageFill
+            if !audioOnly && !hasBackdrop && remoteVideo {
+                LiveAgoraCanvas(view: agora.canvas)
+            }
         }
     }
 
     private func pane(_ seat: LiveSeat) -> some View {
         let mine = seat.userId == myUserId
         let guest = !mine && seat.index != 0
+        let score = max(seat.score, seat.giftCount)
+        let showScore = occupied.count > 1 || score > 0 || giftCount > 0 && seat.index == 0
         return Button {
             onSelect(seat.index)
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color.black.opacity(0.22))
-                if mine && isHosting {
+                if audioOnly {
+                    audioSurface(seat)
+                } else if mine && isHosting {
                     hostSurface
-                } else if remoteVideo {
+                } else if remoteVideo && !hasBackdrop {
                     ZStack {
-                        MediaStageFrame()
+                        stageFill
                         LiveAgoraCanvas(view: agora.canvas)
                     }
                 } else {
-                    MediaStageFrame()
+                    stageFill
                 }
-                LinearGradient(colors: [Color.black.opacity(0.42), .clear, Color.black.opacity(0.38)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(
+                    colors: hasBackdrop
+                        ? [.clear, Color.black.opacity(0.22)]
+                        : [Color.black.opacity(0.42), .clear, Color.black.opacity(0.38)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
                 VStack {
                     HStack(alignment: .center, spacing: 8) {
-                        if seat.index != 0 {
+                        if audioOnly || seat.index != 0 {
                             PersonPhoto(url: seat.avatarUrl, name: seat.shownName, size: 28, fill: ZohorTheme.goldSoft.opacity(0.28), ink: .white)
                             Text(seat.shownName)
                                 .font(.system(size: 13, weight: .semibold))
@@ -1229,16 +2267,18 @@ private struct LiveHostStage: View {
                                 .lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        if seat.index == 0 && giftCount > 0 {
-                            Text("\(giftCount)")
+                        if showScore {
+                            Text("\(seat.index == 0 && occupied.count == 1 ? max(score, giftCount) : score)")
                                 .font(.system(size: 11, weight: .bold))
                                 .foregroundStyle(ZohorTheme.gold)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(Color.black.opacity(0.42), in: Capsule())
-                                .accessibilityLabel("عدد الهدايا \(giftCount)")
+                                .accessibilityLabel("سكور \(seat.shownName) \(score)")
                         }
-                        LiveBadge()
+                        if !audioOnly {
+                            LiveBadge()
+                        }
                         if isOwner && guest {
                             Button {
                                 onUninvite(seat.userId)
@@ -1251,7 +2291,7 @@ private struct LiveHostStage: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("إزالة \(seat.shownName)")
-                        } else if mine && camera.isReady {
+                        } else if mine && camera.isReady && !audioOnly && !hasBackdrop {
                             Button(action: camera.flip) {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                                     .font(.system(size: 11, weight: .semibold))
@@ -1263,6 +2303,12 @@ private struct LiveHostStage: View {
                         }
                     }
                     Spacer(minLength: 0)
+                    if audioOnly {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(ZohorTheme.gold.opacity(0.92))
+                            .padding(.bottom, 8)
+                    }
                 }
                 .padding(10)
             }
@@ -1277,99 +2323,230 @@ private struct LiveHostStage: View {
     }
 
     @ViewBuilder
-    private var hostSurface: some View {
-        if camera.isReady && !camera.usesHostFeed {
-            LiveCameraPreview(session: camera.session)
-        } else if camera.usesHostFeed {
-            SimulatorCameraFeed(url: camera.hostFeedURL)
-        } else {
-            MediaStageFrame()
+    private func audioSurface(_ seat: LiveSeat) -> some View {
+        ZStack {
+            stageFill
+            VStack(spacing: 10) {
+                PersonPhoto(url: seat.avatarUrl, name: seat.shownName, size: 72, fill: ZohorTheme.goldSoft.opacity(0.35), ink: .white)
+                Text(seat.shownName)
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
         }
+    }
+
+    @ViewBuilder
+    private var hostSurface: some View {
+        ZStack {
+            stageFill
+            if !audioOnly && !hasBackdrop {
+                if agora.beauty != .off {
+                    LiveAgoraCanvas(view: agora.canvas)
+                } else if camera.isReady && !camera.usesHostFeed {
+                    LiveCameraPreview(session: camera.session)
+                } else if camera.usesHostFeed {
+                    SimulatorCameraFeed(url: camera.hostFeedURL)
+                }
+            }
+        }
+    }
+}
+
+private struct LiveBeautyTray: View {
+    let selected: LiveBeautyLook
+    let onClose: () -> Void
+    let onPick: (LiveBeautyLook) -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 10) {
+            HStack {
+                Button("إغلاق", action: onClose)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer(minLength: 0)
+                Text("تجميل")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            Text("يؤثر على الكاميرا والمشاهدين — مو طبقات لون.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.horizontal, 16)
+
+            HStack(spacing: 10) {
+                ForEach(LiveBeautyLook.allCases, id: \.self) { item in
+                    Button {
+                        onPick(item)
+                    } label: {
+                        VStack(spacing: 8) {
+                            ZStack {
+                                Circle()
+                                    .fill(selected == item ? ZohorTheme.gold : Color.white.opacity(0.10))
+                                    .frame(width: 54, height: 54)
+                                Image(systemName: item == .off ? "person.crop.circle" : "sparkles")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(selected == item ? Color.black : .white.opacity(0.88))
+                            }
+                            Text(item.title)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(selected == item ? ZohorTheme.gold : .white.opacity(0.82))
+                            Text(item.hint)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.42))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(item.title)
+                    .accessibilityAddTraits(selected == item ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 14)
+        }
+        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.horizontal, 10)
     }
 }
 
 private struct LiveInviteSheet: View {
     let people: [LiveHost]
-    let isBusy: Bool
+    var followingIds: Set<String> = []
+    let mode: LiveChallengeMode
+    var isBusy = false
+    var isSeeking = false
+    var seekingSeconds = 0
+    var remaining = 1
     let onClose: () -> Void
+    let onMode: (LiveChallengeMode) -> Void
     let onRandom: () -> Void
     let onInvite: (LiveHost) -> Void
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 16) {
+        VStack(alignment: .trailing, spacing: 10) {
             HStack {
                 Button("إغلاق", action: onClose)
-                    .foregroundStyle(ZohorTheme.inkMuted)
-                Spacer()
-                Text("استضافة مذيع")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(ZohorTheme.ink)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                Spacer(minLength: 0)
+                Text("تحدي")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
             }
-            Button(action: onRandom) {
-                HStack {
-                    Text(isBusy ? "جارٍ الاختيار" : "تحدٍ عشوائي")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(ZohorTheme.gold)
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("أي مذيع فاتح بث")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(ZohorTheme.ink)
-                        Text("يُختار عشوائيًا ويدخل غرفتك")
-                            .font(.caption)
-                            .foregroundStyle(ZohorTheme.inkMuted)
-                    }
-                    Image(systemName: "shuffle")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(ZohorTheme.gold)
-                }
-                .padding(14)
-                .background(ZohorTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(ZohorTheme.gold.opacity(0.35), lineWidth: 1)
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(isBusy)
-            Text("أو استضف من تتابعهم وهم فاتحين بث. حتى أربعة مذيعين في نفس الغرفة.")
-                .font(.footnote)
-                .foregroundStyle(ZohorTheme.inkMuted)
-            if people.isEmpty {
-                Text("لا أحد من متابَعيك يبث الآن.")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(ZohorTheme.ink)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.top, 12)
-            } else {
-                ForEach(people) { host in
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            HStack(spacing: 8) {
+                ForEach([LiveChallengeMode.duel, .trio, .twovstwo], id: \.self) { item in
                     Button {
-                        onInvite(host)
+                        onMode(item)
                     } label: {
-                        HStack {
-                            Text(isBusy ? "جارٍ الاستضافة" : "استضافة")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(ZohorTheme.gold)
-                            Spacer()
-                            IdentityName(
-                                displayName: host.displayName,
-                                username: host.username,
-                                fallback: "مذيع",
-                                fillsWidth: true
-                            )
-                            PersonPhoto(url: host.avatarUrl, name: host.shownName, size: 40, fill: ZohorTheme.goldSoft.opacity(0.35), ink: ZohorTheme.ink)
-                        }
-                        .padding(12)
-                        .background(ZohorTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        Text(item.title)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(mode == item ? Color.black : .white.opacity(0.78))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(mode == item ? ZohorTheme.gold : Color.white.opacity(0.08), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(isBusy)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+
+            Button(action: onRandom) {
+                HStack {
+                    Text(isSeeking ? "جارٍ البحث \(seekingSeconds)" : "تحدٍ عشوائي")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(ZohorTheme.gold)
+                    Spacer(minLength: 0)
+                    Text(isSeeking ? "انتظر قبول مذيع" : "أي غرفة مفتوحة الآن")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                    Image(systemName: "shuffle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(ZohorTheme.gold)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isBusy || remaining < 1)
+            .padding(.horizontal, 16)
+
+            Text("اختر مذيعًا يبث الآن — الدعوة تصل عنده ليقبل أو يرفض. لا يدخل التحدي إلا بعد قبوله.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.horizontal, 16)
+
+            if people.isEmpty {
+                Text("لا أحد يبث الآن لدعوته.")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
+            } else {
+                ScrollView {
+                    VStack(spacing: 8) {
+                        ForEach(people) { host in
+                            Button {
+                                onInvite(host)
+                            } label: {
+                                HStack {
+                                    Text(isBusy ? "…" : "دعوة")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(ZohorTheme.gold)
+                                    Spacer(minLength: 8)
+                                    VStack(alignment: .trailing, spacing: 2) {
+                                        Text(host.shownName)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .lineLimit(1)
+                                        Text(followingIds.contains(host.userId) ? "تتابعه · على الهواء" : "على الهواء")
+                                            .font(.caption2)
+                                            .foregroundStyle(.white.opacity(0.45))
+                                    }
+                                    PersonPhoto(url: host.avatarUrl, name: host.shownName, size: 36, fill: ZohorTheme.goldSoft.opacity(0.35), ink: .white)
+                                }
+                                .padding(10)
+                                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isBusy || remaining < 1)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(20)
-        .background(ZohorTheme.canvas)
+        .frame(maxWidth: .infinity)
+        .frame(height: 320)
+        .background {
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.04),
+                    Color(red: 0.06, green: 0.04, blue: 0.03).opacity(0.90),
+                    Color(red: 0.03, green: 0.02, blue: 0.02).opacity(0.97),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(ZohorTheme.gold.opacity(0.34))
+                .frame(height: 0.55)
+        }
+        .environment(\.layoutDirection, .rightToLeft)
     }
 }
 
@@ -1414,6 +2591,7 @@ private struct LiveGiftMarkButton: View {
 private struct LiveGiftTray: View {
     let coins: Int
     let showsStore: Bool
+    var allowsGifts: Bool = true
     let onClose: () -> Void
     let onBuy: () -> Void
     let onGifts: () -> Void
@@ -1421,17 +2599,25 @@ private struct LiveGiftTray: View {
     let onBuyPack: (LiveCoinPack) -> Void
     @State private var tier: LiveGiftTier = .greeting
 
+    private var storeMode: Bool { showsStore || !allowsGifts }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             HStack(spacing: 10) {
-                if showsStore {
-                    Button("الهدايا", action: onGifts)
+                if allowsGifts {
+                    if storeMode {
+                        Button("الهدايا", action: onGifts)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ZohorTheme.gold)
+                    } else {
+                        Button("تعبئة", action: onBuy)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(ZohorTheme.gold.opacity(0.72))
+                    }
+                } else {
+                    Text("شحن اللمعات")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(ZohorTheme.gold)
-                } else {
-                    Button("تعبئة", action: onBuy)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ZohorTheme.gold.opacity(0.72))
                 }
                 Text("\(coins)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -1443,7 +2629,7 @@ private struct LiveGiftTray: View {
             .padding(.horizontal, 16)
             .padding(.top, 10)
 
-            if !showsStore {
+            if !storeMode {
                 HStack(spacing: 0) {
                     ForEach(LiveGiftTier.allCases.reversed(), id: \.self) { item in
                         Button {
@@ -1469,7 +2655,7 @@ private struct LiveGiftTray: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    if showsStore {
+                    if storeMode {
                         ForEach(LiveLuxury.packs) { pack in
                             Button {
                                 onBuyPack(pack)
@@ -1481,7 +2667,10 @@ private struct LiveGiftTray: View {
                                     Text(pack.title)
                                         .font(.system(size: 11, weight: .semibold))
                                         .foregroundStyle(.white.opacity(0.92))
-                                    Text("\(pack.coins)")
+                                    Text(pack.priceFallback)
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(ZohorTheme.gold.opacity(0.9))
+                                    Text("\(pack.coins) ✦")
                                         .font(.system(size: 10, weight: .bold))
                                         .foregroundStyle(ZohorTheme.gold)
                                 }
@@ -1506,7 +2695,7 @@ private struct LiveGiftTray: View {
             .environment(\.layoutDirection, .rightToLeft)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 244)
+        .frame(height: storeMode ? 220 : 244)
         .background {
             LinearGradient(
                 colors: [
@@ -1562,7 +2751,7 @@ private struct LiveGiftTile: View {
                             endRadius: 58
                         )
                     )
-                LiveGiftStage3D(mark: gift.mark, hero: gift.tier == .mythic)
+                LiveGiftArt(mark: gift.mark)
                     .frame(width: stageSize, height: stageSize)
                     .allowsHitTesting(false)
             }
@@ -1586,7 +2775,6 @@ private struct LiveGiftFlight: View {
     @State private var scale: CGFloat = 0.28
     @State private var bloom = 0.0
     @State private var fade = 1.0
-    @State private var yaw: Double = -22
 
     private var peak: CGFloat {
         switch gift.tier {
@@ -1612,19 +2800,20 @@ private struct LiveGiftFlight: View {
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color(red: 1.0, green: 0.84, blue: 0.40).opacity(bloom * (gift.tier == .greeting ? 0.28 : 0.55)),
+                            Color(red: 1.0, green: 0.84, blue: 0.40).opacity(bloom * (gift.tier == .greeting ? 0.42 : 0.72)),
+                            Color(red: 0.42, green: 0.24, blue: 0.08).opacity(bloom * 0.55),
                             .clear,
                         ],
                         center: .center,
                         startRadius: 8,
-                        endRadius: 170
+                        endRadius: 180
                     )
                 )
-                .frame(width: 340, height: 340)
-            LiveGiftStage3D(mark: gift.mark, hero: true)
+                .frame(width: 360, height: 360)
+            LiveGiftArt(mark: gift.mark)
                 .frame(width: stageSize, height: stageSize)
         }
-        .rotation3DEffect(.degrees(yaw), axis: (x: 0.12, y: 1, z: 0.08), perspective: 0.55)
+        .compositingGroup()
         .scaleEffect(scale)
         .offset(y: rise)
         .opacity(fade)
@@ -1635,7 +2824,6 @@ private struct LiveGiftFlight: View {
                 rise = -12
                 scale = peak
                 bloom = 1
-                yaw = 18
             }
             let dissolve = Double(gift.flightNanos) / 1_000_000_000 * 0.78
             DispatchQueue.main.asyncAfter(deadline: .now() + dissolve) {
@@ -1643,68 +2831,12 @@ private struct LiveGiftFlight: View {
                     fade = 0
                     scale = peak + 0.18
                     bloom = 0
-                    yaw = 36
                 }
             }
         }
     }
 }
 
-
-private struct LiveCoinStore: View {
-    let coins: Int
-    let onClose: () -> Void
-    let onBuy: (LiveCoinPack) -> Void
-
-    var body: some View {
-        VStack(alignment: .trailing, spacing: 16) {
-            HStack {
-                Button("إغلاق", action: onClose)
-                    .foregroundStyle(ZohorTheme.inkMuted)
-                Spacer()
-                Text("متجر اللُمعة")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(ZohorTheme.ink)
-            }
-            Text("اللُمعة عملة البث. تشتريها من هنا، ثم ترسل بها هدية للمذيع المختار في الغرفة.")
-                .font(.footnote)
-                .foregroundStyle(ZohorTheme.inkMuted)
-            Text("رصيدك الآن \(coins)")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(ZohorTheme.gold)
-            ForEach(LiveLuxury.packs) { pack in
-                Button {
-                    onBuy(pack)
-                } label: {
-                    HStack {
-                        Text(pack.price)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(ZohorTheme.gold)
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text(pack.title)
-                                .font(.headline.weight(.bold))
-                                .foregroundStyle(ZohorTheme.ink)
-                            Text("\(pack.coins) لُمعة · \(pack.hint)")
-                                .font(.caption)
-                                .foregroundStyle(ZohorTheme.inkMuted)
-                        }
-                    }
-                    .padding(14)
-                    .background(ZohorTheme.surfaceRaised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(ZohorTheme.gold.opacity(0.3), lineWidth: 1)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .background(ZohorTheme.canvas)
-    }
-}
 
 private struct LiveBadge: View {
     var body: some View {

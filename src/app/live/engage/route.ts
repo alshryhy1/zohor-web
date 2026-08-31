@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { authErrorResponse, getAuthenticatedUser, userEmailVerified, userId } from "@/lib/supabase/auth";
 import { applyLikeRank, readHostRank } from "@/lib/live-rank";
+import { canWriteHostComments, isBanned, isMuted, roomStaff } from "@/lib/live-access";
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -66,16 +67,34 @@ async function recentGifts(admin: NonNullable<ReturnType<typeof buildSupabaseAdm
   })).filter((row) => row.id && row.giftKey);
 }
 
-async function payload(admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>, hostId: string) {
+async function payload(
+  admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>,
+  hostId: string,
+  viewerId = ""
+) {
   const rank = await readHostRank(admin, hostId);
+  const staff = viewerId ? await roomStaff(admin, hostId, viewerId) : {
+    canModerate: false,
+    isHost: false,
+    isModerator: false,
+    kicked: false,
+    banned: false,
+    muted: false,
+    moderatorIds: [] as string[],
+    mutedIds: [] as string[],
+    moderatorCap: 5,
+  };
+  const blocked = staff.banned || staff.kicked;
   return {
     ok: true,
-    heat: await heatOf(admin, hostId),
-    comments: await commentsOf(admin, hostId),
+    heat: blocked ? 0 : await heatOf(admin, hostId),
+    comments: blocked ? [] : await commentsOf(admin, hostId),
+    canComment: !blocked && viewerId ? await canWriteHostComments(admin, viewerId, hostId) : false,
     level: rank.level,
     progress: rank.progress,
     giftCount: rank.giftCount,
-    gifts: await recentGifts(admin, hostId),
+    gifts: blocked ? [] : await recentGifts(admin, hostId),
+    ...staff,
   };
 }
 
@@ -109,6 +128,9 @@ export async function POST(req: Request) {
       if (!(await isLive(admin, hostId))) {
         return NextResponse.json({ ok: false, code: "not_live", message: "البث غير قائم." }, { status: 400 });
       }
+      if (await isBanned(admin, meId, hostId)) {
+        return NextResponse.json({ ok: false, code: "banned", message: "تم حظرك من هذا البث." }, { status: 403 });
+      }
       const next = (await heatOf(admin, hostId)) + 1;
       await admin.from("live_room_heat").upsert({
         host_user_id: hostId,
@@ -116,12 +138,24 @@ export async function POST(req: Request) {
         updated_at: new Date().toISOString(),
       });
       await applyLikeRank(admin, hostId);
-      return NextResponse.json(await payload(admin, hostId));
+      return NextResponse.json(await payload(admin, hostId, meId));
     }
 
     if (action === "comment") {
       if (!(await isLive(admin, hostId))) {
         return NextResponse.json({ ok: false, code: "not_live", message: "البث غير قائم." }, { status: 400 });
+      }
+      if (await isBanned(admin, meId, hostId)) {
+        return NextResponse.json({ ok: false, code: "banned", message: "تم حظرك من هذا البث." }, { status: 403 });
+      }
+      if (await isMuted(admin, meId, hostId)) {
+        return NextResponse.json({ ok: false, code: "muted", message: "تم كتمك في هذا البث." }, { status: 403 });
+      }
+      if (!(await canWriteHostComments(admin, meId, hostId))) {
+        return NextResponse.json(
+          { ok: false, code: "forbidden", message: "التعليق لمتابعي هذا المذيع وضيوف بثه فقط." },
+          { status: 403 }
+        );
       }
       const text = String(body?.text || "").trim();
       if (!text || text.length > 240) {
@@ -132,10 +166,10 @@ export async function POST(req: Request) {
         user_id: meId,
         body: text,
       });
-      return NextResponse.json(await payload(admin, hostId));
+      return NextResponse.json(await payload(admin, hostId, meId));
     }
 
-    return NextResponse.json(await payload(admin, hostId));
+    return NextResponse.json(await payload(admin, hostId, meId));
   } catch (e: unknown) {
     const authRes = authErrorResponse(e);
     if (authRes) return authRes;

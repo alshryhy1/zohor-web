@@ -582,6 +582,32 @@ export default function SettingsClient({ initialEmail, initialVerified, initialU
             </div>
           )}
         </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            borderRadius: 18,
+            border: `1px solid ${border}`,
+            background: "rgba(255,255,255,0.02)",
+            padding: 14,
+          }}
+        >
+          <div style={{ fontWeight: 1000, marginBottom: 10 }}>السياسات والدعم</div>
+          <div style={{ display: "grid", gap: 8, fontSize: 13, fontWeight: 800 }}>
+            <Link href="/privacy" style={{ color: gold, textDecoration: "none" }}>
+              سياسة الخصوصية
+            </Link>
+            <Link href="/terms" style={{ color: gold, textDecoration: "none" }}>
+              شروط الاستخدام
+            </Link>
+            <Link href="/community" style={{ color: gold, textDecoration: "none" }}>
+              معايير المجتمع
+            </Link>
+            <Link href="/support" style={{ color: gold, textDecoration: "none" }}>
+              الدعم وحذف الحساب
+            </Link>
+          </div>
+        </div>
       </div>
     </main>
   );

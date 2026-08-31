@@ -6,6 +6,11 @@ struct MainTabBar: View {
     var isBroadcasting: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private let calmGreen = Color(red: 0.42, green: 0.68, blue: 0.52)
+    private let calmGreenSoft = Color(red: 0.42, green: 0.68, blue: 0.52).opacity(0.55)
+    private let liveRed = Color(red: 0.92, green: 0.22, blue: 0.26)
+    private let liveRedSoft = Color(red: 0.92, green: 0.22, blue: 0.26).opacity(0.78)
+
     var body: some View {
         HStack(spacing: 0) {
             ForEach(AppTab.allCases) { tab in
@@ -44,11 +49,12 @@ struct MainTabBar: View {
                 ZohorLiveMark(
                     isSelected: selection == tab,
                     isBroadcasting: isBroadcasting,
-                    size: 31
+                    size: 26
                 )
+                .frame(width: 36, height: 36)
             } else {
                 Image(systemName: symbol(for: tab))
-                    .font(.system(size: 23, weight: .regular))
+                    .font(.system(size: 23, weight: selection == tab ? .semibold : .regular))
                     .symbolRenderingMode(.monochrome)
                     .frame(width: 24, height: 24)
             }
@@ -61,14 +67,13 @@ struct MainTabBar: View {
         .frame(maxWidth: .infinity)
         .frame(minHeight: 48)
         .contentShape(Rectangle())
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: selection)
     }
 
     private func foreground(for tab: AppTab) -> Color {
         if tab == .live {
-            return isBroadcasting ? Color(red: 0.93, green: 0.22, blue: 0.24) : Color.white.opacity(selection == tab ? 0.92 : 0.62)
+            return isBroadcasting || selection == tab ? liveRed : liveRedSoft
         }
-        return Color.white.opacity(selection == tab ? 0.78 : 0.38)
+        return selection == tab ? calmGreen : calmGreenSoft
     }
 
     private func symbol(for tab: AppTab) -> String {
@@ -85,43 +90,41 @@ struct MainTabBar: View {
 struct ZohorLiveMark: View {
     var isSelected: Bool = false
     var isBroadcasting: Bool = false
-    var size: CGFloat = 31
+    var size: CGFloat = 26
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse = false
 
-    private var ringColor: Color {
-        if isBroadcasting { return Color.white.opacity(isSelected ? 0.92 : 0.70) }
-        return Color.white.opacity(isSelected ? 0.92 : 0.50)
-    }
-
-    private var coreColor: Color {
-        if isBroadcasting { return Color(red: 0.93, green: 0.22, blue: 0.24) }
-        return Color.white.opacity(isSelected ? 0.88 : 0.48)
-    }
+    private let liveRed = Color(red: 0.92, green: 0.22, blue: 0.26)
 
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(ringColor, lineWidth: 1.8)
-            Circle()
-                .fill(coreColor)
-                .frame(width: size * 0.22, height: size * 0.22)
-                .scaleEffect(isBroadcasting && pulse && !reduceMotion ? 1.16 : 1)
-                .opacity(isBroadcasting && pulse && !reduceMotion ? 0.82 : 1)
+        Group {
+            if isBroadcasting && !reduceMotion {
+                TimelineView(.periodic(from: .now, by: 0.38)) { context in
+                    let lit = Int(context.date.timeIntervalSinceReferenceDate / 0.38) % 2 == 0
+                    mark(lit: lit)
+                }
+            } else {
+                mark(lit: true)
+            }
         }
-        .frame(width: size, height: size)
-        .onAppear { syncPulse() }
-        .onChange(of: isBroadcasting) { _, _ in syncPulse() }
         .accessibilityHidden(true)
     }
 
-    private func syncPulse() {
-        guard isBroadcasting, !reduceMotion else {
-            pulse = false
-            return
+    private func mark(lit: Bool) -> some View {
+        ZStack {
+            if isBroadcasting {
+                Circle()
+                    .stroke(liveRed.opacity(lit ? 0.95 : 0.15), lineWidth: 3)
+                    .frame(width: size + 14, height: size + 14)
+                    .opacity(lit ? 1 : 0.2)
+                Circle()
+                    .fill(liveRed.opacity(lit ? 0.55 : 0.08))
+                    .frame(width: size + 8, height: size + 8)
+            }
+            Circle()
+                .fill(liveRed.opacity(isBroadcasting ? (lit ? 1 : 0.28) : 1))
+                .frame(width: size, height: size)
+                .shadow(color: liveRed.opacity(isBroadcasting && lit ? 0.9 : 0.25), radius: isBroadcasting && lit ? 8 : 2)
         }
-        withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
-            pulse = true
-        }
+        .frame(width: size + 16, height: size + 16)
     }
 }

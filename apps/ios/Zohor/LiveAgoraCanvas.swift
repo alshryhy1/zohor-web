@@ -6,9 +6,36 @@ import UIKit
 import AgoraRtcKit
 #endif
 
+enum LiveBeautyLook: String, CaseIterable, Equatable {
+    case off
+    case soft
+    case natural
+    case glow
+
+    var title: String {
+        switch self {
+        case .off: return "بدون"
+        case .soft: return "ناعم"
+        case .natural: return "طبيعي"
+        case .glow: return "إشراق"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .off: return "الكاميرا كما هي"
+        case .soft: return "تنعيم خفيف"
+        case .natural: return "توازن الوجه"
+        case .glow: return "تفتيح أوضح"
+        }
+    }
+}
+
 @MainActor
 final class LiveAgoraWatcher: NSObject, ObservableObject {
     @Published private(set) var hasRemote = false
+    @Published private(set) var micMuted = false
+    @Published private(set) var beauty: LiveBeautyLook = .off
     let canvas = UIView()
     private var joinedChannel = ""
     private var pushTask: Task<Void, Never>?
@@ -18,54 +45,136 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
     private var engine: AgoraRtcEngineKit?
     #endif
 
-    func watch(appId: String, token: String, channel: String, uid: UInt) {
-        join(appId: appId, token: token, channel: channel, uid: uid, host: false, feed: nil)
+    func watch(appId: String, token: String, channel: String, uid: UInt, audioOnly: Bool = false) {
+        join(appId: appId, token: token, channel: channel, uid: uid, host: false, feed: nil, audioOnly: audioOnly)
     }
 
-    func host(appId: String, token: String, channel: String, uid: UInt, feed: URL? = nil) {
-        join(appId: appId, token: token, channel: channel, uid: uid, host: true, feed: feed)
+    func host(appId: String, token: String, channel: String, uid: UInt, feed: URL? = nil, audioOnly: Bool = false) {
+        join(appId: appId, token: token, channel: channel, uid: uid, host: true, feed: feed, audioOnly: audioOnly)
     }
 
-    private func join(appId: String, token: String, channel: String, uid: UInt, host: Bool, feed: URL?) {
+    func applyMedia(audioOnly: Bool, publishMic: Bool) {
+        #if canImport(AgoraRtcKit)
+        guard let kit = engine else { return }
+        if audioOnly {
+            kit.enableLocalVideo(false)
+            kit.stopPreview()
+            kit.disableVideo()
+            kit.muteLocalVideoStream(true)
+            setBeauty(.off)
+        } else {
+            kit.enableVideo()
+            kit.enableLocalVideo(publishMic)
+            if publishMic { kit.startPreview() }
+            kit.muteLocalVideoStream(!publishMic)
+            applyBeauty()
+        }
+        kit.enableAudio()
+        kit.muteLocalAudioStream(!publishMic || micMuted)
+        #endif
+    }
+
+    func setMicMuted(_ muted: Bool) {
+        micMuted = muted
+        #if canImport(AgoraRtcKit)
+        engine?.muteLocalAudioStream(muted)
+        #endif
+    }
+
+    func toggleMic() {
+        setMicMuted(!micMuted)
+    }
+
+    func setBeauty(_ look: LiveBeautyLook) {
+        beauty = look
+        applyBeauty()
+    }
+
+    private func applyMicMute() {
+        #if canImport(AgoraRtcKit)
+        engine?.muteLocalAudioStream(micMuted)
+        #endif
+    }
+
+    private func applyBeauty() {
+        #if canImport(AgoraRtcKit)
+        guard let kit = engine else { return }
+        let options = AgoraBeautyOptions()
+        switch beauty {
+        case .off:
+            kit.setBeautyEffectOptions(false, options: options)
+            return
+        case .soft:
+            options.lighteningContrastLevel = .normal
+            options.smoothnessLevel = 0.55
+            options.lighteningLevel = 0.42
+            options.rednessLevel = 0.12
+        case .natural:
+            options.lighteningContrastLevel = .normal
+            options.smoothnessLevel = 0.32
+            options.lighteningLevel = 0.22
+            options.rednessLevel = 0.08
+        case .glow:
+            options.lighteningContrastLevel = .high
+            options.smoothnessLevel = 0.68
+            options.lighteningLevel = 0.55
+            options.rednessLevel = 0.18
+        }
+        kit.setBeautyEffectOptions(true, options: options)
+        #endif
+    }
+
+    private func join(appId: String, token: String, channel: String, uid: UInt, host: Bool, feed: URL?, audioOnly: Bool) {
         let next = channel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !appId.isEmpty, !token.isEmpty, !next.isEmpty else { return }
-        if joinedChannel == next, engine != nil { return }
+        if joinedChannel == next, engine != nil {
+            applyMedia(audioOnly: audioOnly, publishMic: host)
+            applyMicMute()
+            return
+        }
         stop()
+        micMuted = false
         joinedChannel = next
-        feedURL = host ? feed : nil
+        feedURL = host && !audioOnly ? feed : nil
         #if canImport(AgoraRtcKit)
         let kit = AgoraRtcEngineKit.sharedEngine(withAppId: appId, delegate: self)
         engine = kit
         kit.setChannelProfile(.liveBroadcasting)
         kit.enableAudio()
-        kit.enableVideo()
+        if audioOnly {
+            kit.disableVideo()
+        } else {
+            kit.enableVideo()
+        }
         kit.setDefaultAudioRouteToSpeakerphone(true)
         let options = AgoraRtcChannelMediaOptions()
         options.clientRoleType = host ? .broadcaster : .audience
         options.autoSubscribeAudio = true
-        options.autoSubscribeVideo = true
+        options.autoSubscribeVideo = !audioOnly
         if host {
             kit.setClientRole(.broadcaster)
-            let custom = feed != nil
+            let custom = feed != nil && !audioOnly
             kit.setExternalVideoSource(custom, useTexture: false, sourceType: .videoFrame)
-            kit.enableLocalVideo(!custom)
-            options.publishCameraTrack = !custom
+            kit.enableLocalVideo(!audioOnly && !custom)
+            options.publishCameraTrack = !audioOnly && !custom
             options.publishCustomVideoTrack = custom
             options.publishMicrophoneTrack = true
-            if !custom {
+            if !audioOnly && !custom {
                 let local = AgoraRtcVideoCanvas()
                 local.uid = 0
                 local.view = canvas
-                local.renderMode = .fit
+                local.renderMode = .hidden
                 kit.setupLocalVideo(local)
                 kit.startPreview()
             }
+            applyBeauty()
         } else {
             kit.setClientRole(.audience)
             options.audienceLatencyLevel = .lowLatency
             options.publishCameraTrack = false
             options.publishCustomVideoTrack = false
             options.publishMicrophoneTrack = false
+            beauty = .off
         }
         let result = kit.joinChannel(byToken: token, channelId: next, uid: uid, mediaOptions: options, joinSuccess: nil)
         if result != 0 {
@@ -82,9 +191,12 @@ final class LiveAgoraWatcher: NSObject, ObservableObject {
         pushTask = nil
         feedURL = nil
         hasRemote = false
+        micMuted = false
+        beauty = .off
         joinedChannel = ""
         canvas.subviews.forEach { $0.removeFromSuperview() }
         #if canImport(AgoraRtcKit)
+        engine?.setBeautyEffectOptions(false, options: AgoraBeautyOptions())
         engine?.setupLocalVideo(AgoraRtcVideoCanvas())
         engine?.setupRemoteVideo(AgoraRtcVideoCanvas())
         engine?.leaveChannel(nil)

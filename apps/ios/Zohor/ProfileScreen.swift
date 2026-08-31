@@ -170,6 +170,12 @@ struct ProfileScreen: View {
             }
             .padding(.horizontal, 24)
 
+            ProfileWalletCard(client: appState.apiClient)
+                .padding(.horizontal, 24)
+
+            HostPayoutCard(client: appState.apiClient)
+                .padding(.horizontal, 24)
+
             VStack(alignment: .trailing, spacing: 10) {
                 Text("منشوراتك")
                     .font(.footnote.weight(.semibold))
@@ -247,6 +253,7 @@ private struct AccountSettingsView: View {
     @State private var isBusy = false
     @State private var deleteStep = 0
     @FocusState private var focus: Field?
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -342,6 +349,18 @@ private struct AccountSettingsView: View {
                 }
                 .padding(.top, 8)
 
+                VStack(alignment: .trailing, spacing: 10) {
+                    Text("السياسات")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    settingsLink("سياسة الخصوصية", path: "/privacy")
+                    settingsLink("شروط الاستخدام", path: "/terms")
+                    settingsLink("معايير المجتمع", path: "/community")
+                    settingsLink("الدعم وحذف الحساب", path: "/support")
+                }
+                .padding(.top, 8)
+
                 if let message, !message.isEmpty {
                     Text(message)
                         .font(.footnote.weight(.medium))
@@ -379,6 +398,14 @@ private struct AccountSettingsView: View {
 
     private var phoneText: String {
         phoneMissing ? "لاحقًا" : phone!.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func settingsLink(_ title: String, path: String) -> some View {
+        settingsAction(title: title) {
+            if let url = URL(string: "https://www.lahzha.com\(path)") {
+                openURL(url)
+            }
+        }
     }
 
     private func settingsAction(title: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
@@ -887,6 +914,13 @@ private struct IdentityCard: View {
                         .foregroundStyle(.white.opacity(0.62))
                         .lineLimit(1)
                 }
+                if let email, !email.isEmpty {
+                    Text(email)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.38))
+                        .lineLimit(1)
+                        .environment(\.layoutDirection, .leftToRight)
+                }
             }
             PhotosPicker(selection: $photoItem, matching: .images) {
                 ZStack(alignment: .bottomLeading) {
@@ -922,6 +956,271 @@ private struct IdentityCard: View {
         if !handle.isEmpty { return handle }
         if let email, let local = email.split(separator: "@").first { return String(local) }
         return "حساب لحظة"
+    }
+}
+
+private struct ProfileWalletCard: View {
+    let client: ZohorAPIClient?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var coins = 0
+    @State private var message: String?
+    @State private var busy = false
+    @State private var isOpen = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: isOpen ? 12 : 0) {
+            Button {
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) {
+                    isOpen.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.left")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                    Text("\(coins) ✦")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(ZohorTheme.gold)
+                    Spacer(minLength: 0)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("محفظتي")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.72))
+                        Text(isOpen ? "إخفاء الشحن" : "اضغط للشحن")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.42))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("محفظتي")
+            .accessibilityHint(isOpen ? "إخفاء حزم الشحن" : "فتح حزم الشحن")
+            .accessibilityAddTraits(.isButton)
+
+            if isOpen {
+                Text("اختر حزمة ثم أكمل الدفع وارجع للتطبيق")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+
+                ForEach(LiveLuxury.packs) { pack in
+                    Button {
+                        Task { await buy(pack) }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(pack.priceFallback)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(ZohorTheme.gold)
+                            Spacer(minLength: 0)
+                            VStack(alignment: .trailing, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    if pack.featured {
+                                        Text("الأكثر")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.white.opacity(0.45))
+                                    }
+                                    Text(pack.title)
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(.white)
+                                }
+                                if pack.bonusCoins > 0 {
+                                    Text("\(pack.baseCoins) + \(pack.bonusCoins)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.45))
+                                }
+                                Text("\(pack.coins) لُمعة")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(ZohorTheme.gold)
+                            }
+                        }
+                        .padding(12)
+                        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(pack.featured ? ZohorTheme.gold.opacity(0.4) : Color.white.opacity(0.08), lineWidth: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy || client == nil)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .task { await reload() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await resume() }
+        }
+    }
+
+    private func reload() async {
+        guard let client else {
+            message = "سجّل الدخول لشحن المحفظة."
+            return
+        }
+        coins = await client.liveWallet()
+    }
+
+    private func buy(_ pack: LiveCoinPack) async {
+        guard let client else { return }
+        busy = true
+        message = "أكمل الدفع ثم ارجع للتطبيق…"
+        defer { busy = false }
+        do {
+            coins = try await client.buyLiveCoins(packId: pack.id)
+            message = "تمت إضافة \(pack.coins) لُمعة."
+        } catch {
+            if case .cancelled = error as? LiveCoinIAPError { return }
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر شراء الحزمة."
+        }
+    }
+
+    private func resume() async {
+        guard let client else { return }
+        if let next = await client.resumePendingPaymobIfNeeded() {
+            coins = next
+            message = "تم تأكيد شحن اللمعات."
+            isOpen = true
+        } else {
+            await reload()
+        }
+    }
+}
+
+private struct HostPayoutCard: View {
+    let client: ZohorAPIClient?
+    @State private var summary: HostPayoutSummary?
+    @State private var message: String?
+    @State private var iban = ""
+    @State private var name = ""
+    @State private var amountText = "100"
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 12) {
+            Text("أرباح البث")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.52))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if let summary {
+                HStack {
+                    Text("\(summary.sharePercent)٪")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(ZohorTheme.gold)
+                    Spacer()
+                    Text("نسبتك الحالية")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                payoutLine("أرباحك", summary.earningsSar)
+                payoutLine("قيد المقاصة", summary.clearingSar)
+                payoutLine("قابل للسحب", summary.withdrawableSar)
+
+                if !summary.kycReady {
+                    TextField("الاسم على الحساب", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("IBAN", text: $iban)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.characters)
+                    Button("حفظ وسيلة الدفع") {
+                        Task { await saveMethod() }
+                    }
+                    .disabled(busy)
+                } else {
+                    TextField("مبلغ السحب (ر.س)", text: $amountText)
+                        .textFieldStyle(.roundedBorder)
+                        .keyboardType(.decimalPad)
+                    Button(summary.withdrawFrozen ? "السحب مجمّد" : "طلب سحب") {
+                        Task { await withdraw() }
+                    }
+                    .disabled(busy || summary.withdrawFrozen)
+                }
+            } else {
+                Text(payoutNotice(message) ?? "جاري تحميل الأرباح…")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+
+            if summary != nil, let message, !message.isEmpty {
+                Text(payoutNotice(message) ?? message)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .task { await reload() }
+    }
+
+    private func payoutNotice(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return raw }
+        let low = raw.lowercased()
+        if low.contains("sql") || low.contains("schema") || low.contains("function") || low.contains("payout") && low.contains("lahza") {
+            return "الأرباح غير متاحة بعد."
+        }
+        return raw
+    }
+
+    private func payoutLine(_ title: String, _ value: Double) -> some View {
+        HStack {
+            Text(String(format: "%.2f ر.س", value))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Spacer()
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    private func reload() async {
+        guard let client else {
+            message = "تعذر تحميل الأرباح."
+            return
+        }
+        do {
+            summary = try await client.hostPayoutSummary()
+            message = nil
+        } catch {
+            message = payoutNotice((error as? LocalizedError)?.errorDescription) ?? "الأرباح غير متاحة بعد."
+        }
+    }
+
+    private func saveMethod() async {
+        guard let client else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await client.saveHostPayoutMethod(iban: iban, name: name)
+            message = "تم حفظ وسيلة الدفع."
+            await reload()
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر الحفظ."
+        }
+    }
+
+    private func withdraw() async {
+        guard let client else { return }
+        let amount = Double(amountText.replacingOccurrences(of: ",", with: ".")) ?? 0
+        busy = true
+        defer { busy = false }
+        do {
+            try await client.requestHostWithdrawal(amountSar: amount)
+            message = "تم تسجيل طلب السحب (مراجعة يدوية)."
+            await reload()
+        } catch {
+            message = (error as? LocalizedError)?.errorDescription ?? "تعذر طلب السحب."
+        }
     }
 }
 

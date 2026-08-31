@@ -5,11 +5,14 @@ struct MainShellView: View {
 
     var body: some View {
         ZStack {
-            ZohorAtmosphere()
+            ZohorDusk()
             tabBody
         }
+        .preferredColorScheme(.dark)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            MainTabBar(selection: $appState.selectedTab)
+            if !appState.liveImmersed {
+                MainTabBar(selection: $appState.selectedTab, isBroadcasting: appState.isBroadcasting)
+            }
         }
         .environment(\.layoutDirection, .rightToLeft)
     }

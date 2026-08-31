@@ -16,7 +16,7 @@ struct RootView: View {
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: appState.isAuthenticated)
         .environment(\.layoutDirection, .rightToLeft)
-        .task {
+        .task(id: appState.session?.userId) {
             if appState.isAuthenticated {
                 await appState.prepareSession()
             }

@@ -1,0 +1,34 @@
+---
+description: Locked Lahza coin-pack ladder and IAP product IDs — implementation started
+alwaysApply: true
+---
+
+# حزم اللمعات — معتمد 25 أغسطس 2026
+
+لا تغيّر السلم أو ترفع الإمبراطورية لتغطية الجمل.
+
+## الحزم (Consumable)
+
+| الحزمة | id | Product ID | التسليم | سعر مرجعي (ر.س) |
+| --- | --- | --- | ---: | ---: |
+| حفنة | `handful` | `lahza.coins.handful` | 100 | 3.99 |
+| صندوق | `chest` | `lahza.coins.chest` | 550 | 19.99 |
+| خزينة | `vault` | `lahza.coins.vault` | 1,500 | 49.99 |
+| إمبراطورية | `empire` | `lahza.coins.empire` | 4,000 | 119.99 |
+
+لا تستخدم `box` أو `treasury`. أربع حزم فقط.
+
+عرض المكافأة (واجهة فقط): صندوق 500+50، خزينة 1,200+300، إمبراطورية 3,000+1,000. الرصيد المضاف هو عمود التسليم.
+
+السعر الظاهر في التطبيق من StoreKit بعد الربط، لا من الرقم المرجعي.
+
+## الجمل
+
+`desert_camel` = 5,000 لمعة. فوق سقف الإمبراطورية **مقصود**. لا ترفع الإمبراطورية إلى 5,500.
+
+## IAP (بدأ التنفيذ)
+
+- المسار: StoreKit → `POST /live/iap` → `redeem_live_iap` (service role) → محفظة + دفتر.
+- التسليم فقط بعد تحقق؛ الافتراضي fail-closed حتى `LAHZA_IAP_SANDBOX_TRUST=1` أو مفاتيح App Store Server API.
+- أنشئ المنتجات الأربعة في App Store Connect وامسح SQL: `lahza-iap-payout.sql`.
+- لا شحن وهمي من زر الشراء بدون معاملة آبل.

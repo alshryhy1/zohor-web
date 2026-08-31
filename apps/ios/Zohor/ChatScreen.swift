@@ -187,7 +187,8 @@ struct ChatScreen: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: ZohorTheme.contentMaxWidth)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(ZohorDusk())
         .task {
             await appState.refreshFollowing()
             await consumePendingChat()

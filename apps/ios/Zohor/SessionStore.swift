@@ -7,7 +7,7 @@ enum SessionStoreError: Error {
 }
 
 struct SessionStore {
-    private let service = "com.zohor.app.session"
+    private let service = "com.alshryhy.lahza.session"
     private let account = "current"
 
     func load() -> UserSession? {

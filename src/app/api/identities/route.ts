@@ -28,12 +28,11 @@ async function fillFromAuth(
       const { data } = await admin.auth.admin.getUserById(id);
       const meta = (data.user?.user_metadata || {}) as Record<string, unknown>;
       const avatar = cleanName(meta["avatar_url"] || meta["avatarUrl"]);
-      const name = cleanName(meta["name"] || meta["full_name"] || meta["display_name"]);
       const username = cleanName(meta["username"]) || current?.username || "";
       found.set(id, {
         id,
         username,
-        display_name: current?.display_name || name,
+        display_name: current?.display_name || "",
         avatar_url: current?.avatar_url || avatar,
       });
     } catch {

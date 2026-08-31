@@ -86,10 +86,12 @@ async function sourceSignUp(input: { email: string; password: string; name: stri
       insertError = (await admin.from("profiles").insert({ id: meId, username })).error;
     }
     if (insertError) {
+      await admin.auth.admin.deleteUser(meId);
       const low = String(insertError.message || "").toLowerCase();
       if (low.includes("duplicate") || low.includes("unique")) {
         return { status: 409, body: { ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." } };
       }
+      return { status: 400, body: { ok: false, code: "signup_failed", message: "تعذر إنشاء الملف الشخصي." } };
     }
   }
 
