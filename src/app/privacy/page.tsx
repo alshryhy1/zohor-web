@@ -74,10 +74,18 @@ export default function PrivacyPage() {
         </p>
       </LegalSection>
 
+      <LegalSection title="التتبع والإعلانات">
+        <p>
+          لا نستخدم معرف الإعلان (IDFA) لتتبعك عبر تطبيقات أو مواقع أخرى، ولا نعرض إعلانات طرف ثالث تعتمد على ملفك.
+          لا نطلب إذن App Tracking Transparency لأننا لا نتتبّعك لهذا الغرض. قد تظهر إحصاءات داخلية مجمّعة لتحسين
+          الاستقرار دون بيع بياناتك.
+        </p>
+      </LegalSection>
+
       <LegalSection title="الأذونات على الجهاز">
         <p>
-          الكاميرا والميكروفون والموقع والصور تُطلب لغرض واضح في النظام، ويمكنك رفضها أو سحبها من إعدادات الجهاز. رفض
-          الإذن قد يمنع ميزة معيّنة دون منع بقية التطبيق.
+          الكاميرا والميكروفون والموقع والصور تُطلب لغرض واضح في النظام (لحظات، بث، خلفية الاستوديو، موقع الخريطة)،
+          ويمكنك رفضها أو سحبها من إعدادات الجهاز. رفض الإذن قد يمنع ميزة معيّنة دون منع بقية التطبيق.
         </p>
       </LegalSection>
 
@@ -100,8 +108,8 @@ export default function PrivacyPage() {
           logs. We use this to run the service, moderate abuse, deliver virtual coins, and process eligible host
           payouts. We do not sell personal data. Processors include Apple, Supabase, Agora, and a payments provider.
           Delete your account in the app settings or email {LEGAL_CONTACT}; we complete deletion within 30 days except
-          records we must keep by law. Purchases, gifts, and withdrawals are 18+. Contact {LEGAL_PRIVACY} for privacy
-          requests.
+          records we must keep by law. Purchases, gifts, and withdrawals are 18+. We do not use IDFA or cross-app
+          advertising tracking. Contact {LEGAL_PRIVACY} for privacy requests.
         </p>
       </LegalSection>
     </LegalPage>

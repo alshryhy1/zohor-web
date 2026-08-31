@@ -318,7 +318,7 @@ export default function SettingsClient({ initialEmail, initialVerified, initialU
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <Link
-            href="/feed"
+            href="/"
             style={{
               width: 44,
               height: 44,

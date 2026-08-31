@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "لحظة",
   description: "فيديو وبث مباشر في اللحظة. سياسة الخصوصية والشروط على lahzha.com.",
   applicationName: "لحظة",
+  metadataBase: new URL("https://www.lahzha.com"),
+  alternates: {
+    canonical: "/",
+  },
   appleWebApp: {
     capable: true,
     title: "لحظة",

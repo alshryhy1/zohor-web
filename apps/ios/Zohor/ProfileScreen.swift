@@ -358,6 +358,9 @@ private struct AccountSettingsView: View {
                     settingsLink("شروط الاستخدام", path: "/terms")
                     settingsLink("معايير المجتمع", path: "/community")
                     settingsLink("الدعم وحذف الحساب", path: "/support")
+                    settingsAction(title: "إبلاغ عن محتوى أو حساب") {
+                        openReportMail()
+                    }
                 }
                 .padding(.top, 8)
 
@@ -405,6 +408,19 @@ private struct AccountSettingsView: View {
             if let url = URL(string: "https://www.lahzha.com\(path)") {
                 openURL(url)
             }
+        }
+    }
+
+    private func openReportMail() {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = "support@lahzha.com"
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "إبلاغ عن محتوى أو حساب"),
+            URLQueryItem(name: "body", value: "اسم المستخدم المخالف:\nرابط أو وصف:\n"),
+        ]
+        if let url = components.url {
+            openURL(url)
         }
     }
 

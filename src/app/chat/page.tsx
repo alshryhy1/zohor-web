@@ -466,7 +466,7 @@ export default function ChatPage() {
         <div className="chatTop">
           <div className="chatTopLeft">
             <Link
-              href="/feed"
+              href="/"
               className="chatChipLink"
             >
               رجوع
