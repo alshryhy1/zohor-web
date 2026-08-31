@@ -292,35 +292,35 @@ final class AppState: ObservableObject {
         }
     }
 
+    private var refreshTask: Task<Bool, Never>?
+
     @discardableResult
     func refreshSessionQuietly() async -> Bool {
-        guard let session, let authClient else { return false }
-        do {
-            let next = try await authClient.refresh(refreshToken: session.refreshToken)
-            try sessionStore.save(next)
-            self.session = next
-            bindRemotePhotos()
-            return true
-        } catch {
-            if error is URLError {
+        if let refreshTask {
+            return await refreshTask.value
+        }
+        let task = Task { @MainActor in
+            defer { self.refreshTask = nil }
+            guard let session = self.session, let authClient = self.authClient else { return false }
+            do {
+                let next = try await authClient.refresh(refreshToken: session.refreshToken)
+                try self.sessionStore.save(next)
+                self.session = next
+                self.bindRemotePhotos()
+                return true
+            } catch {
+                // Keep the user signed in. Voice/live must not kick to Auth on a soft refresh miss.
                 return false
             }
-            // Refresh rejected (expired/revoked): end local session instead of half-open UI.
-            signOut()
-            return false
         }
+        refreshTask = task
+        return await task.value
     }
 
     func prepareSession() async {
         guard session != nil, authClient != nil else { return }
-        let refreshed = await refreshSessionQuietly()
-        if !refreshed, session == nil {
-            return
-        }
-        if !refreshed, session != nil {
-            // Network blip — keep local session and continue best-effort.
-            bindRemotePhotos()
-        }
+        _ = await refreshSessionQuietly()
+        bindRemotePhotos()
         await refreshFollowing()
         profile = try? await apiClient?.profile()
     }

@@ -531,6 +531,10 @@ final class LiveViewModel: ObservableObject {
         } catch {
             if (error as NSError).domain == NSURLErrorDomain {
                 message = "تعذر فتح الغرفة الصوتية. السيرفر غير متصل."
+            } else if let api = error as? ZohorAPIError, case .server(_, let text, let status) = api, status == 401 {
+                message = text.contains("توثيق") ? text : "تعذر التحقق من الجلسة. أعد المحاولة."
+            } else if let api = error as? ZohorAPIError, case .missingSession = api {
+                message = "تعذر التحقق من الجلسة. أعد المحاولة."
             } else {
                 let text = (error as? LocalizedError)?.errorDescription ?? ""
                 let low = text.lowercased()
@@ -1437,11 +1441,6 @@ struct LiveScreen: View {
                     Spacer(minLength: 0)
                     LiveRoomChip(title: "غرفة صوت") {
                         Task {
-                            await appState.prepareSession()
-                            guard appState.isAuthenticated else {
-                                model.message = "يلزم تسجيل الدخول."
-                                return
-                            }
                             guard let room = await model.startVoice(using: appState.apiClient),
                                   let client = appState.apiClient,
                                   let join = try? await client.agoraJoin(channel: room.channel, role: "host")
@@ -1452,11 +1451,6 @@ struct LiveScreen: View {
                     }
                     LiveRoomChip(title: model.isBusy ? "جارٍ البدء" : "بدء البث", emphasis: true) {
                         Task {
-                            await appState.prepareSession()
-                            guard appState.isAuthenticated else {
-                                model.message = "يلزم تسجيل الدخول."
-                                return
-                            }
                             guard let mine = await model.start(using: appState.apiClient),
                                   let client = appState.apiClient,
                                   let join = try? await client.agoraJoin(channel: mine.channel, role: "host")
