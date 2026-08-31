@@ -50,7 +50,7 @@ async function idList(
   const { data, error } = await admin.from(table).select(column).eq("host_user_id", hostId);
   if (error || !data) return [] as string[];
   return data
-    .map((row) => String((row as Record<string, unknown>)[column] || "").trim())
+    .map((row) => String(((row as unknown) as Record<string, unknown>)[column] || "").trim())
     .filter(Boolean);
 }
 

@@ -185,18 +185,18 @@ export async function POST(req: Request) {
     const username = String((user as { user_metadata?: Record<string, unknown> }).user_metadata?.username || "").trim();
 
     if (action === "list") {
-      let listed = await admin
+      const withExtras = await admin
         .from("voice_rooms")
         .select("id,host_user_id,username,channel,backdrop_url,filter_key,created_at")
         .order("created_at", { ascending: false })
         .limit(40);
-      if (listed.error) {
-        listed = await admin
-          .from("voice_rooms")
-          .select("id,host_user_id,username,channel,created_at")
-          .order("created_at", { ascending: false })
-          .limit(40);
-      }
+      const listed = withExtras.error
+        ? await admin
+            .from("voice_rooms")
+            .select("id,host_user_id,username,channel,created_at")
+            .order("created_at", { ascending: false })
+            .limit(40)
+        : withExtras;
       const { data, error } = listed;
       if (error) {
         return NextResponse.json({ ok: true, rooms: [], needSql: true });
