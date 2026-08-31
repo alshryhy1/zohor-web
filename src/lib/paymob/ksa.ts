@@ -75,7 +75,7 @@ export async function createIntention(input: {
   }
 
   const amount = Math.max(1, Math.round(Number(input.amountHalalas) || 0));
-  const description = String(input.description || "لحظة").trim() || "لحظة";
+  const description = String(input.description || "لحظاتك").trim() || "لحظاتك";
   const body = {
     amount,
     currency: String(input.currency || "SAR").toUpperCase(),

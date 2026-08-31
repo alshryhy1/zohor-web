@@ -217,7 +217,7 @@ export function MomentCreateFab() {
   const [selected, setSelected] = React.useState<string[]>([]);
 
   const tags = React.useMemo(
-    () => ["#لحظة", "#فيديو", "#صورة", "#رياض", "#سفر", "#أكل", "#ضحك", "#موسيقى"],
+    () => ["#لحظاتك", "#فيديو", "#صورة", "#رياض", "#سفر", "#أكل", "#ضحك", "#موسيقى"],
     []
   );
 
@@ -497,7 +497,7 @@ export function MomentMediaUploader({
   const [msg, setMsg] = React.useState("");
 
   const tags = React.useMemo(
-    () => ["#لحظة", "#فيديو", "#صورة", "#رياض", "#سفر", "#أكل", "#ضحك", "#موسيقى"],
+    () => ["#لحظاتك", "#فيديو", "#صورة", "#رياض", "#سفر", "#أكل", "#ضحك", "#موسيقى"],
     []
   );
 

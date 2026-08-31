@@ -555,7 +555,7 @@ struct MomentsScreen: View {
 
     private func shareSelected() {
         guard let moment = model.selectedMoment else { return }
-        let items: [Any] = [moment.mediaUrl, moment.username.isEmpty ? "لحظة" : "لحظة \(moment.username)"]
+        let items: [Any] = [moment.mediaUrl, moment.username.isEmpty ? "لحظاتك" : "لحظاتك \(moment.username)"]
         let activity = UIActivityViewController(activityItems: items, applicationActivities: nil)
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let root = scene.windows.first(where: \.isKeyWindow)?.rootViewController ?? scene.windows.first?.rootViewController

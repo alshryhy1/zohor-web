@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { LEGAL_CONTACT, LEGAL_PRIVACY, LegalPage, LegalSection } from "../_components/legal-page";
 
 export const metadata: Metadata = {
-  title: "سياسة الخصوصية — لحظة",
-  description: "كيف يجمع تطبيق لحظة بياناتك ويستخدمها ويحذفها.",
+  title: "سياسة الخصوصية — لحظاتك",
+  description: "كيف يجمع تطبيق لحظاتك بياناتك ويستخدمها ويحذفها.",
 };
 
 export default function PrivacyPage() {
@@ -11,7 +11,7 @@ export default function PrivacyPage() {
     <LegalPage title="سياسة الخصوصية" titleEn="Privacy Policy">
       <LegalSection title="من نحن">
         <p>
-          «لحظة» تطبيق وموقع للتواصل الاجتماعي والبث المباشر على النطاق lahzha.com. هذه السياسة توضّح البيانات التي
+          «لحظاتك» تطبيق وموقع للتواصل الاجتماعي والبث المباشر على النطاق lahzha.com. هذه السياسة توضّح البيانات التي
           نجمعها ولماذا، وكيف يمكنك طلب حذفها. نلتزم بمتطلبات خصوصية App Store ومبادئ نظام حماية البيانات الشخصية في
           المملكة العربية السعودية حيثما انطبق.
         </p>
@@ -103,7 +103,7 @@ export default function PrivacyPage() {
 
       <LegalSection title="English summary">
         <p>
-          Lahza (“لحظة”) on lahzha.com collects account, profile, user content, optional location, camera/microphone
+          Lahza (“لحظاتك”) on lahzha.com collects account, profile, user content, optional location, camera/microphone
           while you broadcast or upload, purchase records via Apple or a local payment provider, and limited device
           logs. We use this to run the service, moderate abuse, deliver virtual coins, and process eligible host
           payouts. We do not sell personal data. Processors include Apple, Supabase, Agora, and a payments provider.

@@ -112,7 +112,7 @@ struct AuthView: View {
 
     private var brand: some View {
         VStack(spacing: isCompactHeight ? 10 : 14) {
-            Text("لحظة")
+            Text("لحظاتك")
                 .font(.system(dynamicTypeSize.isAccessibilitySize ? .title : .largeTitle, design: .default, weight: .heavy))
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.8)
@@ -126,7 +126,7 @@ struct AuthView: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
-        .accessibilityLabel("لحظة")
+        .accessibilityLabel("لحظاتك")
     }
 
     private var photoPicker: some View {

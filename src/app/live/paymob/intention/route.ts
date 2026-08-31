@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     const specialReference = `lahza:${pack.packId}:${meId}:${Date.now()}`;
     const created = await createIntention({
       amountHalalas: pack.amountHalalas,
-      description: `لحظة ${pack.labelAr} (${pack.coins} لمعة) — ${cfg.merchantName}`,
+      description: `لحظاتك ${pack.labelAr} (${pack.coins} لمعة) — ${cfg.merchantName}`,
       billing: {
         first_name: first,
         last_name: last,

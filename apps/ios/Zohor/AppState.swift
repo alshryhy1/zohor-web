@@ -58,10 +58,15 @@ final class AppState: ObservableObject {
             supabaseURL: runtimeConfig.supabaseURL,
             supabaseAnonKey: runtimeConfig.supabaseAnonKey,
             agoraAppId: runtimeConfig.agoraAppId,
-            agoraAppCertificate: runtimeConfig.agoraAppCertificate
-        ) { [weak self] in
-            await MainActor.run { self?.session }
-        }
+            agoraAppCertificate: runtimeConfig.agoraAppCertificate,
+            sessionProvider: { [weak self] in
+                await MainActor.run { self?.session }
+            },
+            sessionRefresher: { [weak self] in
+                guard let self else { return false }
+                return await self.refreshSessionQuietly()
+            }
+        )
         cachedAPIClient = client
         return client
     }
@@ -287,14 +292,35 @@ final class AppState: ObservableObject {
         }
     }
 
-    func prepareSession() async {
-        guard let session, let authClient else { return }
+    @discardableResult
+    func refreshSessionQuietly() async -> Bool {
+        guard let session, let authClient else { return false }
         do {
             let next = try await authClient.refresh(refreshToken: session.refreshToken)
             try sessionStore.save(next)
             self.session = next
-        } catch {}
-        bindRemotePhotos()
+            bindRemotePhotos()
+            return true
+        } catch {
+            if error is URLError {
+                return false
+            }
+            // Refresh rejected (expired/revoked): end local session instead of half-open UI.
+            signOut()
+            return false
+        }
+    }
+
+    func prepareSession() async {
+        guard session != nil, authClient != nil else { return }
+        let refreshed = await refreshSessionQuietly()
+        if !refreshed, session == nil {
+            return
+        }
+        if !refreshed, session != nil {
+            // Network blip — keep local session and continue best-effort.
+            bindRemotePhotos()
+        }
         await refreshFollowing()
         profile = try? await apiClient?.profile()
     }

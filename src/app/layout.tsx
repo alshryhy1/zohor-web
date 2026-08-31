@@ -3,16 +3,16 @@ import "./globals.css";
 import BottomNav from "./_components/bottom-nav";
 
 export const metadata: Metadata = {
-  title: "لحظة",
+  title: "لحظاتك",
   description: "فيديو وبث مباشر في اللحظة. سياسة الخصوصية والشروط على lahzha.com.",
-  applicationName: "لحظة",
+  applicationName: "لحظاتك",
   metadataBase: new URL("https://www.lahzha.com"),
   alternates: {
     canonical: "/",
   },
   appleWebApp: {
     capable: true,
-    title: "لحظة",
+    title: "لحظاتك",
     statusBarStyle: "black-translucent",
   },
   formatDetection: {

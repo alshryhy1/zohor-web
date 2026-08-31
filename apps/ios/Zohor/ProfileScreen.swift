@@ -139,7 +139,7 @@ struct ProfileScreen: View {
                         .font(.system(size: 40, weight: .bold))
                         .foregroundStyle(.white)
                         .minimumScaleFactor(0.75)
-                    Text("هويتك داخل لحظة")
+                    Text("هويتك داخل لحظاتك")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white.opacity(0.62))
                 }
@@ -680,7 +680,7 @@ struct PublicAccountScreen: View {
                             IdentityName(
                                 displayName: loadedName.isEmpty ? displayName : loadedName,
                                 username: username,
-                                fallback: "لحظة",
+                                fallback: "لحظاتك",
                                 nameFont: .title3.weight(.semibold),
                                 nameColor: .white,
                                 handleColor: .white.opacity(0.62),
@@ -971,7 +971,7 @@ private struct IdentityCard: View {
         }
         if !handle.isEmpty { return handle }
         if let email, let local = email.split(separator: "@").first { return String(local) }
-        return "حساب لحظة"
+        return "حساب لحظاتك"
     }
 }
 

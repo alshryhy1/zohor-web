@@ -116,7 +116,7 @@ export async function POST(req: Request) {
       ? await fetchProfileUsername(admin, meId)
       : "";
     const username = profileUsername || deriveUsername(user);
-    const basePayload = { title: "لحظة", desc: desc || null, media_url: mediaUrl };
+    const basePayload = { title: "لحظاتك", desc: desc || null, media_url: mediaUrl };
     const publishPayload = {
       ...basePayload,
       user_id: meId || null,

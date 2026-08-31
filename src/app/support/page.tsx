@@ -3,8 +3,8 @@ import Link from "next/link";
 import { LEGAL_CONTACT, LEGAL_PRIVACY, LegalPage, LegalSection } from "../_components/legal-page";
 
 export const metadata: Metadata = {
-  title: "الدعم وحذف الحساب — لحظة",
-  description: "تواصل مع لحظة واطلب حذف حسابك وبياناتك.",
+  title: "الدعم وحذف الحساب — لحظاتك",
+  description: "تواصل مع لحظاتك واطلب حذف حسابك وبياناتك.",
 };
 
 export default function SupportPage() {

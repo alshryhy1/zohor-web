@@ -1,0 +1,211 @@
+{
+  "results": [
+    {
+      "test": "1. شراء handful → +100 مرة واحدة",
+      "ok": true,
+      "evidence": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "coins": 100,
+          "pack_id": "handful",
+          "credited": 100,
+          "replayed": false
+        },
+        "txn": "sandbox-handful-0ec24300-ba22-4f01-9bac-c015a30188dd",
+        "note": "عبر redeem_live_iap (مسار ما بعد StoreKit)؛ ليس نقر StoreKit UI"
+      },
+      "error": ""
+    },
+    {
+      "test": "2. إعادة نفس transaction_id → replayed بلا زيادة",
+      "ok": true,
+      "evidence": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "coins": 100,
+          "pack_id": "handful",
+          "credited": 100,
+          "replayed": true
+        },
+        "balance_unchanged": 100
+      },
+      "error": ""
+    },
+    {
+      "test": "3. هدية تخصم من المرسل ولا تزيد محفظة المذيع",
+      "ok": true,
+      "evidence": {
+        "gift": {
+          "ok": true,
+          "name": "وردة حمراء",
+          "coins": 90,
+          "gift_id": "a4c16357-89d1-45cc-ac6b-10a0d9c251cc",
+          "replayed": false,
+          "host_share_bps": 5000,
+          "host_amount_sar": 0.127209
+        },
+        "sender_before": 100,
+        "sender_after": 90,
+        "host_wallet_before": 0,
+        "host_wallet_after": 0
+      },
+      "error": ""
+    },
+    {
+      "test": "4. أرباح المذيع بالريال مع share_bps",
+      "ok": true,
+      "evidence": {
+        "earning": {
+          "id": "3be15bcd-1b23-4e61-bca2-2fac4364195d",
+          "user_id": "bd213c8d-6288-48b5-9299-fe8ea61dde38",
+          "gift_id": "a4c16357-89d1-45cc-ac6b-10a0d9c251cc",
+          "lumens": 10,
+          "share_bps": 5000,
+          "amount_sar": 0.127209,
+          "clearing_until": "2026-09-08T19:22:32.15806+00:00",
+          "created_at": "2026-08-25T19:22:32.15806+00:00"
+        },
+        "expected_share_bps": 5000
+      },
+      "error": ""
+    },
+    {
+      "test": "5. الربح ضمن مقاصة 14 يومًا وليس قابلًا للسحب فورًا",
+      "ok": true,
+      "evidence": {
+        "summary": {
+          "ok": true,
+          "kyc_ready": false,
+          "share_bps": 5000,
+          "badge_peak": false,
+          "clearing_sar": 0.13,
+          "earnings_sar": 0.13,
+          "withdraw_frozen": false,
+          "withdrawable_sar": 0.0,
+          "min_withdrawal_sar": 100,
+          "pending_withdrawal_sar": 0.0
+        }
+      },
+      "error": ""
+    },
+    {
+      "test": "6. سحب 99 ر.س → رفض",
+      "ok": true,
+      "evidence": {
+        "status": 400,
+        "body": {
+          "code": "P0001",
+          "details": null,
+          "hint": null,
+          "message": "الحد الأدنى للسحب 100 ر.س."
+        }
+      },
+      "error": ""
+    },
+    {
+      "test": "7. سحب 100 ر.س → pending فقط",
+      "ok": false,
+      "evidence": {
+        "status": 400,
+        "body": {
+          "code": "P0001",
+          "details": null,
+          "hint": null,
+          "message": "يلزم عمر حساب 14 يومًا على الأقل."
+        },
+        "summary": {
+          "ok": true,
+          "kyc_ready": true,
+          "share_bps": 5000,
+          "badge_peak": false,
+          "clearing_sar": 0.13,
+          "earnings_sar": 150.13,
+          "withdraw_frozen": false,
+          "withdrawable_sar": 150.0,
+          "min_withdrawal_sar": 100,
+          "pending_withdrawal_sar": 0.0
+        },
+        "withdrawals": [],
+        "seed_insert_status": 201,
+        "seed": [
+          {
+            "id": "67ca6dbd-faf2-41ec-904c-125637c345cb",
+            "user_id": "bd213c8d-6288-48b5-9299-fe8ea61dde38",
+            "gift_id": null,
+            "lumens": 12000,
+            "share_bps": 5000,
+            "amount_sar": 150.0,
+            "clearing_until": "2020-01-01T00:00:00+00:00",
+            "created_at": "2026-08-25T19:22:39.473223+00:00"
+          }
+        ]
+      },
+      "error": "could not create pending — likely account age <14d (no code change)"
+    }
+  ],
+  "cleanup": [
+    {
+      "host_withdrawals": 204
+    },
+    {
+      "host_earning_ledger": 204
+    },
+    {
+      "host_payout_profiles": 204
+    },
+    {
+      "live_iap_redemptions": 204
+    },
+    {
+      "live_gifts": 204
+    },
+    {
+      "live_gifts": 204
+    },
+    {
+      "live_coin_ledger": 204
+    },
+    {
+      "live_wallets": 204
+    },
+    {
+      "live_broadcast_sessions": 204
+    },
+    {
+      "auth_delete": 200
+    },
+    {
+      "host_withdrawals": 204
+    },
+    {
+      "host_earning_ledger": 204
+    },
+    {
+      "host_payout_profiles": 204
+    },
+    {
+      "live_iap_redemptions": 204
+    },
+    {
+      "live_gifts": 204
+    },
+    {
+      "live_gifts": 204
+    },
+    {
+      "live_coin_ledger": 204
+    },
+    {
+      "live_wallets": 204
+    },
+    {
+      "live_broadcast_sessions": 204
+    },
+    {
+      "auth_delete": 200
+    }
+  ],
+  "txn": "sandbox-handful-0ec24300-ba22-4f01-9bac-c015a30188dd"
+}

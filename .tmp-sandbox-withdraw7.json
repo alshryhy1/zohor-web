@@ -1,0 +1,119 @@
+{
+  "test": "7. withdrawable >= 100 → pending",
+  "ok": true,
+  "evidence": {
+    "created_at": "2026-08-06T01:50:01.289314Z",
+    "email": "lahza.test7.4eedcf5a7d@example.com",
+    "save_method": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "kyc_ready": true
+      }
+    },
+    "seed": {
+      "status": 201,
+      "body": [
+        {
+          "id": "d1e90856-3a40-403a-a141-0bfab0f43298",
+          "user_id": "486360ae-0a0c-4615-803e-9cbd7cb5fb74",
+          "gift_id": null,
+          "lumens": 12000,
+          "share_bps": 5000,
+          "amount_sar": 150.0,
+          "clearing_until": "2020-01-01T00:00:00+00:00",
+          "created_at": "2026-08-26T01:51:16.136076+00:00"
+        }
+      ]
+    },
+    "summary_before": {
+      "ok": true,
+      "kyc_ready": true,
+      "share_bps": 5000,
+      "badge_peak": false,
+      "clearing_sar": 0.0,
+      "earnings_sar": 150.0,
+      "withdraw_frozen": false,
+      "withdrawable_sar": 150.0,
+      "min_withdrawal_sar": 100,
+      "pending_withdrawal_sar": 0.0
+    },
+    "withdraw1": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "status": "pending",
+        "amount_sar": 100.0,
+        "withdrawal_id": "b0a98bf6-08ca-435f-b39a-c5120d6cbcbe"
+      }
+    },
+    "rows_after_first": [
+      {
+        "id": "b0a98bf6-08ca-435f-b39a-c5120d6cbcbe",
+        "amount_sar": 100.0,
+        "status": "pending",
+        "created_at": "2026-08-26T01:51:17.320646+00:00"
+      }
+    ],
+    "withdraw2": {
+      "status": 400,
+      "body": {
+        "code": "P0001",
+        "details": null,
+        "hint": null,
+        "message": "المبلغ أكبر من القابل للسحب."
+      }
+    },
+    "rows_after_second": [
+      {
+        "id": "b0a98bf6-08ca-435f-b39a-c5120d6cbcbe",
+        "amount_sar": 100.0,
+        "status": "pending"
+      }
+    ],
+    "summary_after": {
+      "ok": true,
+      "kyc_ready": true,
+      "share_bps": 5000,
+      "badge_peak": false,
+      "clearing_sar": 0.0,
+      "earnings_sar": 150.0,
+      "withdraw_frozen": false,
+      "withdrawable_sar": 50.0,
+      "min_withdrawal_sar": 100,
+      "pending_withdrawal_sar": 100.0
+    },
+    "cleanup": [
+      {
+        "host_withdrawals": 204
+      },
+      {
+        "host_earning_ledger": 204
+      },
+      {
+        "host_payout_profiles": 204
+      },
+      {
+        "live_wallets": 204
+      },
+      {
+        "live_coin_ledger": 204
+      },
+      {
+        "live_iap_redemptions": 204
+      },
+      {
+        "auth_delete": 200
+      },
+      {
+        "auth_get_after": 404
+      }
+    ],
+    "checks": {
+      "accepted": true,
+      "pending_only": true,
+      "no_double_spend": true
+    }
+  },
+  "error": ""
+}

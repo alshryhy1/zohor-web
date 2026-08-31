@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Map local web env values into iOS Debug config without printing secrets."""
+"""Map env / secrets into iOS Info.plist. Debug → local BFF. Release → production."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ IOS_BFF = "ZOHOR_BFF_BASE_URL"
 IOS_AGORA_ID = "ZOHOR_AGORA_APP_ID"
 IOS_AGORA_CERT = "ZOHOR_AGORA_APP_CERTIFICATE"
 LOCAL_BFF = "http://127.0.0.1:3002"
+PROD_BFF = "https://www.lahzha.com"
 
 
 def parse_env(path: Path) -> dict[str, str]:
@@ -54,7 +55,7 @@ def xcconfig_escape(value: str) -> str:
     return value.replace("//", "/$()/")
 
 
-def write_xcconfig(url: str, anon: str, bff: str) -> None:
+def write_local_xcconfig(url: str, anon: str, bff: str) -> None:
     LOCAL_XCCONFIG.parent.mkdir(parents=True, exist_ok=True)
     LOCAL_XCCONFIG.write_text(
         "// Generated from .env.local. Do not commit.\n"
@@ -63,6 +64,30 @@ def write_xcconfig(url: str, anon: str, bff: str) -> None:
         f"{IOS_BFF} = {xcconfig_escape(bff)}\n",
         encoding="utf-8",
     )
+
+
+def ensure_release_bff() -> None:
+    """Keep production BFF on lahzha.com; never ship localhost or bare Supabase as BFF."""
+    secrets = parse_xcconfig(RELEASE_SECRETS)
+    if not secrets:
+        return
+    bff = secrets.get(IOS_BFF, "").strip()
+    if bff.startswith("https://www.lahzha.com"):
+        return
+    # Rewrite only the BFF line; preserve other secrets.
+    lines: list[str] = []
+    found = False
+    if RELEASE_SECRETS.exists():
+        for raw in RELEASE_SECRETS.read_text(encoding="utf-8").splitlines():
+            stripped = raw.strip()
+            if stripped.startswith(f"{IOS_BFF}"):
+                lines.append(f"{IOS_BFF} = {xcconfig_escape(PROD_BFF)}")
+                found = True
+            else:
+                lines.append(raw)
+    if not found:
+        lines.append(f"{IOS_BFF} = {xcconfig_escape(PROD_BFF)}")
+    RELEASE_SECRETS.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
 def resolve_plist_path() -> Path | None:
@@ -79,7 +104,16 @@ def resolve_plist_path() -> Path | None:
     return None
 
 
-def inject_plist(url: str, anon: str, bff: str) -> bool:
+def is_release_build() -> bool:
+    config = (
+        os.environ.get("CONFIGURATION")
+        or os.environ.get("CONFIGURATION_BUILD_DIR")
+        or ""
+    ).lower()
+    return "release" in config
+
+
+def inject_plist(url: str, anon: str, bff: str, agora_id: str = "", agora_cert: str = "") -> bool:
     plist = resolve_plist_path()
     if plist is None:
         return False
@@ -90,11 +124,10 @@ def inject_plist(url: str, anon: str, bff: str) -> bool:
     data[IOS_URL] = url
     data[IOS_ANON] = anon
     data[IOS_BFF] = bff
-    secrets = parse_xcconfig(RELEASE_SECRETS)
-    if secrets.get(IOS_AGORA_ID):
-        data[IOS_AGORA_ID] = secrets[IOS_AGORA_ID]
-    if secrets.get(IOS_AGORA_CERT):
-        data[IOS_AGORA_CERT] = secrets[IOS_AGORA_CERT]
+    if agora_id:
+        data[IOS_AGORA_ID] = agora_id
+    if agora_cert:
+        data[IOS_AGORA_CERT] = agora_cert
     plist.parent.mkdir(parents=True, exist_ok=True)
     with plist.open("wb") as handle:
         plistlib.dump(data, handle, fmt=plistlib.FMT_BINARY)
@@ -102,6 +135,32 @@ def inject_plist(url: str, anon: str, bff: str) -> bool:
 
 
 def main() -> None:
+    ensure_release_bff()
+    secrets = parse_xcconfig(RELEASE_SECRETS)
+    release = is_release_build()
+
+    if release:
+        url = secrets.get(IOS_URL, "").strip()
+        anon = secrets.get(IOS_ANON, "").strip()
+        bff = secrets.get(IOS_BFF, "").strip() or PROD_BFF
+        if "127.0.0.1" in bff or "localhost" in bff or "supabase.co" in bff:
+            bff = PROD_BFF
+        if not url or not anon:
+            raise SystemExit("ReleaseSecrets.xcconfig missing Supabase URL/anon key")
+        injected = inject_plist(
+            url,
+            anon,
+            bff,
+            secrets.get(IOS_AGORA_ID, "").strip(),
+            secrets.get(IOS_AGORA_CERT, "").strip(),
+        )
+        print("synced release iOS config")
+        print(f"url_present={True} url_len={len(url)}")
+        print(f"anon_present={True} anon_len={len(anon)}")
+        print(f"bff_host={bff.split('/')[2] if '://' in bff else '?'}")
+        print(f"plist_injected={injected}")
+        return
+
     if not ENV_FILE.exists():
         raise SystemExit("missing local env file")
     values = parse_env(ENV_FILE)
@@ -112,8 +171,14 @@ def main() -> None:
     if not url.startswith("http"):
         raise SystemExit("local Supabase URL is not an http URL")
     bff = values.get(IOS_BFF, "").strip() or LOCAL_BFF
-    write_xcconfig(url, anon, bff)
-    injected = inject_plist(url, anon, bff)
+    write_local_xcconfig(url, anon, bff)
+    injected = inject_plist(
+        url,
+        anon,
+        bff,
+        secrets.get(IOS_AGORA_ID, "").strip(),
+        secrets.get(IOS_AGORA_CERT, "").strip(),
+    )
     print("synced local iOS Supabase config")
     print(f"url_present={True} url_len={len(url)}")
     print(f"anon_present={True} anon_len={len(anon)}")

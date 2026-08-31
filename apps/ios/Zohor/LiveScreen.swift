@@ -86,15 +86,23 @@ final class LiveViewModel: ObservableObject {
             if !fresh.displayName.isEmpty { watching.displayName = fresh.displayName }
             if !fresh.username.isEmpty { watching.username = fresh.username }
             if let avatar = fresh.avatarUrl { watching.avatarUrl = avatar }
-            watching.backdropUrl = fresh.backdropUrl ?? watching.backdropUrl
-            if let url = watching.backdropUrl { backdropUrl = url }
+            watching.backdropUrl = fresh.backdropUrl
+            if let url = watching.backdropUrl {
+                backdropUrl = url
+            } else if backdropImage == nil {
+                backdropUrl = nil
+            }
             self.watching = watching
             media = fresh.media
         } else if let watching {
             media = watching.media
         } else if let mine = mine(userId: self.sessionUserId) {
             media = mine.media
-            if let url = mine.backdropUrl { backdropUrl = url }
+            if let url = mine.backdropUrl {
+                backdropUrl = url
+            } else if backdropImage == nil, voiceRoom == nil {
+                backdropUrl = nil
+            }
         }
         if let voice = voiceRoom, let client {
             if let board = try? await client.voiceRoomThrowing(action: "get", hostUserId: voice.hostUserId) {
@@ -267,7 +275,11 @@ final class LiveViewModel: ObservableObject {
         voiceSeats = board.seats
         comments = board.comments
         canComment = board.canComment
-        if let url = voiceRoom?.backdropUrl { backdropUrl = url }
+        if let url = voiceRoom?.backdropUrl {
+            backdropUrl = url
+        } else if backdropImage == nil {
+            backdropUrl = nil
+        }
     }
 
     func mine(userId: String?) -> LiveHost? {
@@ -427,21 +439,30 @@ final class LiveViewModel: ObservableObject {
     func setBackdrop(_ url: URL?, using client: ZohorAPIClient?) async {
         guard let client else { return }
         message = nil
-        if url == nil {
-            backdropImage = nil
-            backdropUrl = nil
+        let clearing = url == nil
+        if clearing {
+            clearBackdropLocal()
         }
         do {
             if voiceRoom != nil {
                 let board = try await client.voiceRoomThrowing(action: "backdrop", backdropUrl: url?.absoluteString ?? "")
-                applyVoice(board, fallback: voiceRoom)
-                backdropUrl = url ?? voiceRoom?.backdropUrl
+                // Trust server payload for backdrop (including clear); do not merge old URL back.
+                applyVoice(board)
+                if clearing {
+                    clearBackdropLocal()
+                    if var room = voiceRoom {
+                        room.backdropUrl = nil
+                        voiceRoom = room
+                    }
+                } else {
+                    backdropUrl = url ?? voiceRoom?.backdropUrl
+                }
             } else {
                 let host = try await client.setLiveBackdrop(url)
-                applyLiveBackdrop(host.backdropUrl ?? url)
+                applyLiveBackdrop(clearing ? nil : (host.backdropUrl ?? url))
             }
         } catch {
-            if url != nil, backdropImage != nil {
+            if !clearing, backdropImage != nil {
                 backdropUrl = url
                 message = nil
             } else {
@@ -558,10 +579,10 @@ final class LiveViewModel: ObservableObject {
     }
 
     private func mergedVoice(_ room: VoiceRoom?, fallback: VoiceRoom) -> VoiceRoom {
-        var next = room ?? fallback
+        guard var next = room else { return fallback }
         if next.displayName.isEmpty { next.displayName = fallback.displayName }
         if next.username.isEmpty { next.username = fallback.username }
-        if next.backdropUrl == nil { next.backdropUrl = fallback.backdropUrl }
+        // Keep server backdrop as-is (nil = default stage). Do not revive a cleared studio image.
         return next
     }
 
@@ -853,23 +874,25 @@ struct LiveScreen: View {
     }
 
     private var hostBackdropChip: some View {
-        PhotosPicker(selection: $backdropItem, matching: .images) {
-            Text("خلفية")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(hasRoomBackdrop ? Color.black : .white)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: true)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(hasRoomBackdrop ? ZohorTheme.gold : Color.black.opacity(0.46), in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("خلفية من الاستوديو")
-        .contextMenu {
+        HStack(spacing: 8) {
+            PhotosPicker(selection: $backdropItem, matching: .images) {
+                Text(hasRoomBackdrop ? "تغيير" : "خلفية")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(hasRoomBackdrop ? Color.black : .white)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(hasRoomBackdrop ? ZohorTheme.gold : Color.black.opacity(0.46), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(hasRoomBackdrop ? "تغيير خلفية الاستوديو" : "اختيار خلفية من الاستوديو")
+
             if hasRoomBackdrop {
-                Button("إزالة الخلفية") {
+                LiveRoomChip(title: "افتراضي") {
                     Task { await model.setBackdrop(nil, using: appState.apiClient) }
                 }
+                .accessibilityLabel("إزالة الخلفية والرجوع للوضع العادي")
             }
         }
     }
@@ -1414,6 +1437,11 @@ struct LiveScreen: View {
                     Spacer(minLength: 0)
                     LiveRoomChip(title: "غرفة صوت") {
                         Task {
+                            await appState.prepareSession()
+                            guard appState.isAuthenticated else {
+                                model.message = "يلزم تسجيل الدخول."
+                                return
+                            }
                             guard let room = await model.startVoice(using: appState.apiClient),
                                   let client = appState.apiClient,
                                   let join = try? await client.agoraJoin(channel: room.channel, role: "host")
@@ -1424,6 +1452,11 @@ struct LiveScreen: View {
                     }
                     LiveRoomChip(title: model.isBusy ? "جارٍ البدء" : "بدء البث", emphasis: true) {
                         Task {
+                            await appState.prepareSession()
+                            guard appState.isAuthenticated else {
+                                model.message = "يلزم تسجيل الدخول."
+                                return
+                            }
                             guard let mine = await model.start(using: appState.apiClient),
                                   let client = appState.apiClient,
                                   let join = try? await client.agoraJoin(channel: mine.channel, role: "host")

@@ -35,7 +35,7 @@ export function LegalPage({
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 22 }}>
         <Link href="/" style={{ color: "#C9A24D", fontWeight: 800, textDecoration: "none" }}>
-          لحظة
+          لحظاتك
         </Link>
         <nav style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 13, fontWeight: 700 }}>
           {links.map((item) => (

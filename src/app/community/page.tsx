@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { LEGAL_CONTACT, LegalPage, LegalSection } from "../_components/legal-page";
 
 export const metadata: Metadata = {
-  title: "معايير المجتمع — لحظة",
-  description: "قواعد المحتوى والإبلاغ والحظر في لحظة، بما يتوافق مع سياسة المحتوى الذي ينشئه المستخدمون في أبل.",
+  title: "معايير المجتمع — لحظاتك",
+  description: "قواعد المحتوى والإبلاغ والحظر في لحظاتك، بما يتوافق مع سياسة المحتوى الذي ينشئه المستخدمون في أبل.",
 };
 
 export default function CommunityPage() {
@@ -11,7 +11,7 @@ export default function CommunityPage() {
     <LegalPage title="معايير المجتمع" titleEn="Community Standards">
       <LegalSection title="لماذا هذه الصفحة">
         <p>
-          «لحظة» منصة محتوى ينشئه المستخدمون: لحظات، خريطة، دردشة، تعليقات، بث وغرف صوتية. وفق سياسة أبل للتطبيقات ذات
+          «لحظاتك» منصة محتوى ينشئه المستخدمون: لحظات، خريطة، دردشة، تعليقات، بث وغرف صوتية. وفق سياسة أبل للتطبيقات ذات
           المحتوى الذي ينشئه المستخدمون نوفر قواعد واضحة، وسيلة إبلاغ، حظرًا، وإشرافًا، ووسيلة تواصل منشورة.
         </p>
       </LegalSection>

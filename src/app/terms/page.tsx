@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { LEGAL_CONTACT, LegalPage, LegalSection } from "../_components/legal-page";
 
 export const metadata: Metadata = {
-  title: "شروط الاستخدام — لحظة",
-  description: "شروط استخدام تطبيق وموقع لحظة، بما في ذلك المحتوى والمشتريات والبث.",
+  title: "شروط الاستخدام — لحظاتك",
+  description: "شروط استخدام تطبيق وموقع لحظاتك، بما في ذلك المحتوى والمشتريات والبث.",
 };
 
 export default function TermsPage() {
@@ -11,7 +11,7 @@ export default function TermsPage() {
     <LegalPage title="شروط الاستخدام" titleEn="Terms of Use">
       <LegalSection title="القبول">
         <p>
-          باستخدامك تطبيق أو موقع «لحظة» فأنت توافق على هذه الشروط وسياسة الخصوصية ومعايير المجتمع. إن لم توافق فلا
+          باستخدامك تطبيق أو موقع «لحظاتك» فأنت توافق على هذه الشروط وسياسة الخصوصية ومعايير المجتمع. إن لم توافق فلا
           تستخدم الخدمة.
         </p>
       </LegalSection>
@@ -32,7 +32,7 @@ export default function TermsPage() {
 
       <LegalSection title="المحتوى الذي تنشره">
         <p>
-          تبقى مالكًا لمحتواك. تمنح «لحظة» ترخيصًا محدودًا غير حصري لعرضه وتشغيله داخل الخدمة (بما في ذلك البث
+          تبقى مالكًا لمحتواك. تمنح «لحظاتك» ترخيصًا محدودًا غير حصري لعرضه وتشغيله داخل الخدمة (بما في ذلك البث
           والتعليقات واللحظات والخريطة). لا تنشر ما تنتهك به حقوق غيرك أو القانون. يمكننا إزالة المحتوى المخالف.
         </p>
       </LegalSection>

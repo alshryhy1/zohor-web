@@ -27,6 +27,7 @@ actor ZohorAPIClient {
     private let agoraAppId: String
     private let agoraAppCertificate: String
     private let sessionProvider: @Sendable () async -> UserSession?
+    private let sessionRefresher: @Sendable () async -> Bool
 
     init(
         baseURL: URL,
@@ -34,7 +35,8 @@ actor ZohorAPIClient {
         supabaseAnonKey: String,
         agoraAppId: String = "",
         agoraAppCertificate: String = "",
-        sessionProvider: @escaping @Sendable () async -> UserSession?
+        sessionProvider: @escaping @Sendable () async -> UserSession?,
+        sessionRefresher: @escaping @Sendable () async -> Bool = { false }
     ) {
         self.baseURL = baseURL
         self.supabaseURL = supabaseURL
@@ -42,6 +44,7 @@ actor ZohorAPIClient {
         self.agoraAppId = agoraAppId
         self.agoraAppCertificate = agoraAppCertificate
         self.sessionProvider = sessionProvider
+        self.sessionRefresher = sessionRefresher
     }
 
     private var writesViaBFF: Bool {
@@ -1763,7 +1766,7 @@ actor ZohorAPIClient {
                 "POST",
                 path: "/rest/v1/moments",
                 json: Rich(
-                    title: "لحظة",
+                    title: "لحظاتك",
                     desc: description,
                     media_url: mediaUrl.absoluteString,
                     user_id: session.userId,
@@ -1779,7 +1782,7 @@ actor ZohorAPIClient {
                 "POST",
                 path: "/rest/v1/moments",
                 json: Slim(
-                    title: "لحظة",
+                    title: "لحظاتك",
                     desc: description,
                     media_url: mediaUrl.absoluteString,
                     user_id: session.userId,
@@ -2160,6 +2163,31 @@ actor ZohorAPIClient {
     }
 
     private func requestData<Body: Encodable>(path: String, method: String, body: Body?) async throws -> Data {
+        try await authorizedRequest(path: path, method: method, body: body, allowRefresh: true)
+    }
+
+    private func requestPlainJSON<Body: Encodable>(path: String, body: Body) async throws -> Data {
+        try await authorizedPOST(path: path, body: body, allowRefresh: true)
+    }
+
+    private func authorizedPOST<Body: Encodable>(path: String, body: Body, allowRefresh: Bool) async throws -> Data {
+        guard let session = await sessionProvider() else { throw ZohorAPIError.missingSession }
+        var request = URLRequest(url: try makeURL(path))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        do {
+            return try await send(request)
+        } catch {
+            if allowRefresh, Self.isUnauthorized(error), await sessionRefresher() {
+                return try await authorizedPOST(path: path, body: body, allowRefresh: false)
+            }
+            throw error
+        }
+    }
+
+    private func authorizedRequest<Body: Encodable>(path: String, method: String, body: Body?, allowRefresh: Bool) async throws -> Data {
         guard let session = await sessionProvider() else { throw ZohorAPIError.missingSession }
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
@@ -2168,39 +2196,58 @@ actor ZohorAPIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder.zohor.encode(body)
         }
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw ZohorAPIError.invalidResponse }
-        if !(200..<300).contains(http.statusCode) {
-            let failure = try? JSONDecoder.zohor.decode(APIErrorPayload.self, from: data)
-            throw ZohorAPIError.server(
-                code: failure?.code ?? "server_error",
-                message: failure?.message ?? "تعذر تنفيذ الطلب.",
-                status: http.statusCode
-            )
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw ZohorAPIError.invalidResponse }
+            if !(200..<300).contains(http.statusCode) {
+                let failure = try? JSONDecoder.zohor.decode(APIErrorPayload.self, from: data)
+                throw ZohorAPIError.server(
+                    code: failure?.code ?? "server_error",
+                    message: failure?.message ?? "تعذر تنفيذ الطلب.",
+                    status: http.statusCode
+                )
+            }
+            return data
+        } catch {
+            if allowRefresh, Self.isUnauthorized(error), await sessionRefresher() {
+                return try await authorizedRequest(path: path, method: method, body: body, allowRefresh: false)
+            }
+            throw error
         }
-        return data
-    }
-
-    private func requestPlainJSON<Body: Encodable>(path: String, body: Body) async throws -> Data {
-        guard let session = await sessionProvider() else { throw ZohorAPIError.missingSession }
-        var request = URLRequest(url: try makeURL(path))
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
-        return try await send(request)
     }
 
     private func supabaseGet<T: Decodable>(path: String, query: [URLQueryItem]) async throws -> T {
+        try await supabaseGet(path: path, query: query, allowRefresh: true)
+    }
+
+    private func supabaseGet<T: Decodable>(path: String, query: [URLQueryItem], allowRefresh: Bool) async throws -> T {
         guard let session = await sessionProvider() else { throw ZohorAPIError.missingSession }
         var request = URLRequest(url: try makeURL(path, query: query, base: supabaseURL))
         request.httpMethod = "GET"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let data = try await send(request)
-        return try JSONDecoder().decode(T.self, from: data)
+        do {
+            let data = try await send(request)
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            if allowRefresh, Self.isUnauthorized(error), await sessionRefresher() {
+                return try await supabaseGet(path: path, query: query, allowRefresh: false)
+            }
+            throw error
+        }
+    }
+
+    private static func isUnauthorized(_ error: Error) -> Bool {
+        guard let api = error as? ZohorAPIError, case .server(let code, let message, let status) = api else {
+            return false
+        }
+        if status == 401 { return true }
+        let blob = "\(code) \(message)".lowercased()
+        return blob.contains("unauthorized")
+            || blob.contains("يلزم تسجيل")
+            || blob.contains("jwt")
+            || blob.contains("انتهت الجلسة")
     }
 
     private func send(_ request: URLRequest) async throws -> Data {

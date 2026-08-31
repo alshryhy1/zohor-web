@@ -634,7 +634,7 @@ private struct MapPostViewer: View {
                 IdentityName(
                     displayName: post.displayName,
                     username: post.username,
-                    fallback: "لحظة",
+                    fallback: "لحظاتك",
                     nameFont: .title3.weight(.bold),
                     fillsWidth: true
                 )
