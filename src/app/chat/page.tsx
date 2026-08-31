@@ -15,7 +15,10 @@ type Conversation = {
 type Message = {
   id: string;
   conversation_id: string;
-  sender_id: string;
+  sender_id?: string;
+  user_id?: string;
+  senderId?: string;
+  userId?: string;
   body: string;
   created_at: string;
 };
@@ -38,6 +41,10 @@ function normalizePhone(raw: string) {
 
 function asObj(v: unknown) {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
+}
+
+function messageSenderId(message: Message) {
+  return String(message.sender_id || message.user_id || message.senderId || message.userId || "").trim();
 }
 
 async function apiChat(body: Record<string, unknown>) {
@@ -91,16 +98,32 @@ export default function ChatPage() {
 
   const refreshMe = React.useCallback(async () => {
     try {
+      let authUserId = "";
+      try {
+        const authRes = await fetch("/api/auth", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "me" }),
+        });
+        const authJson = (await authRes.json().catch(() => null)) as unknown;
+        const authObj = asObj(authJson);
+        if (authRes.ok && authObj && authObj["ok"] === true) {
+          const user = asObj(authObj["user"]);
+          authUserId = String(user?.["id"] || "").trim();
+        }
+      } catch {}
+
       const res = await fetch("/api/profile", { method: "GET" });
       const json = (await res.json().catch(() => null)) as unknown;
       const obj = asObj(json);
       if (!res.ok || !obj || obj["ok"] !== true) {
-        setMeId("");
+        setMeId(authUserId);
         setMePhone("");
         return;
       }
       const profile = asObj(obj["profile"]);
-      setMeId(String(profile?.["id"] || "").trim());
+      const profileId = String(profile?.["id"] || "").trim();
+      setMeId(authUserId || profileId);
       setMePhone(String(profile?.["phone"] || "").trim());
     } catch {
       setMeId("");
@@ -408,7 +431,7 @@ export default function ChatPage() {
             .chatPanel { min-height: 62vh; }
           }
           .chatMessages { margin-top: 10px; flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 6px 2px; }
-          .chatRow { display: flex; }
+          .chatRow { display: flex; direction: ltr; }
           .chatRowMine { justify-content: flex-end; }
           .chatRowOther { justify-content: flex-start; }
           .chatBubble {
@@ -420,6 +443,8 @@ export default function ChatPage() {
             line-height: 1.65;
             white-space: pre-wrap;
             word-break: break-word;
+            direction: rtl;
+            text-align: right;
           }
           .chatBubbleMine {
             background: linear-gradient(135deg, rgba(201,162,77,0.96) 0%, rgba(201,162,77,0.64) 100%);
@@ -635,7 +660,7 @@ export default function ChatPage() {
                   <div style={{ fontSize: 12, opacity: 0.85, fontWeight: 900 }}>ابدأ محادثة خاصة أو أنشئ قروب.</div>
                 ) : null}
                 {messages.map((m) => {
-                  const mine = m.sender_id === meId;
+                  const mine = messageSenderId(m) === meId;
                   return (
                     <div key={m.id} className={`chatRow ${mine ? "chatRowMine" : "chatRowOther"}`}>
                       <div

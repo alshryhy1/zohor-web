@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "gift_royal_yacht.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

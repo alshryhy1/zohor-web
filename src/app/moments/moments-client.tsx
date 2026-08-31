@@ -459,14 +459,17 @@ export default function MomentsClient({
   initialFollowingIds,
   meId,
   meUsername,
+  variant = "page",
 }: {
   initialMoments: Moment[];
   initialFollowingIds: string[];
   meId: string;
   meUsername: string;
+  variant?: "home" | "page";
 }) {
   const router = useRouter();
   const supabase = React.useMemo(() => buildSupabaseClient(), []);
+  const isHome = variant === "home";
 
   const [followingIds, setFollowingIds] = React.useState<Set<string>>(() => new Set(initialFollowingIds || []));
   const [moments, setMoments] = React.useState<Moment[]>(() => initialMoments || []);
@@ -976,6 +979,47 @@ export default function MomentsClient({
         overflow: "hidden",
       }}
     >
+      {isHome ? (
+        <nav
+          aria-label="السياسات"
+          style={{
+            position: "absolute",
+            top: "calc(env(safe-area-inset-top, 0px) + 12px)",
+            insetInlineEnd: 12,
+            zIndex: 60,
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            maxWidth: "58%",
+          }}
+        >
+          {[
+            ["/privacy", "الخصوصية"],
+            ["/terms", "الشروط"],
+            ["/community", "المجتمع"],
+            ["/support", "الدعم"],
+          ].map(([href, label]) => (
+            <Link
+              key={href}
+              href={href}
+              style={{
+                color: "rgba(255,255,255,0.78)",
+                textDecoration: "none",
+                fontSize: 11,
+                fontWeight: 800,
+                padding: "6px 8px",
+                borderRadius: 999,
+                background: "rgba(0,0,0,0.35)",
+                border: `1px solid ${border}`,
+              }}
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+      ) : null}
+
       <div
         style={{
           position: "absolute",

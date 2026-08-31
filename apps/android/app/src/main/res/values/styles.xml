@@ -1,0 +1,3 @@
+<resources>
+    <style name="Theme.Zohor" parent="android:style/Theme.Material.Light.NoActionBar" />
+</resources>

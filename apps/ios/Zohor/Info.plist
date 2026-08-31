@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>ZOHOR_SUPABASE_URL</key>
+	<string>$(ZOHOR_SUPABASE_URL)</string>
+	<key>ZOHOR_SUPABASE_ANON_KEY</key>
+	<string>$(ZOHOR_SUPABASE_ANON_KEY)</string>
+	<key>ZOHOR_BFF_BASE_URL</key>
+	<string>$(ZOHOR_BFF_BASE_URL)</string>
+	<key>ZOHOR_AGORA_APP_ID</key>
+	<string>$(ZOHOR_AGORA_APP_ID)</string>
+	<key>ZOHOR_AGORA_APP_CERTIFICATE</key>
+	<string>$(ZOHOR_AGORA_APP_CERTIFICATE)</string>
+</dict>
+</plist>

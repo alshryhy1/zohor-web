@@ -4,7 +4,7 @@ import BottomNav from "./_components/bottom-nav";
 
 export const metadata: Metadata = {
   title: "لحظة",
-  description: "فيديو وبث مباشر في اللحظة.",
+  description: "فيديو وبث مباشر في اللحظة. سياسة الخصوصية والشروط على lahzha.com.",
   applicationName: "لحظة",
   appleWebApp: {
     capable: true,

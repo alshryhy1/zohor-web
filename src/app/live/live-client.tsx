@@ -14,6 +14,14 @@ type RemoteUser = {
   hasVideo: boolean;
 };
 
+type ActiveLive = {
+  key: string;
+  channel: string;
+  name: string;
+  uid: string;
+  at: string;
+};
+
 type LiveMessage = {
   id: string;
   text: string;
@@ -103,6 +111,37 @@ function sanitizeText(input: string, max: number) {
   return t.slice(0, m);
 }
 
+function asObj(value: unknown) {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function activeLivesFromPresenceState(state: unknown): ActiveLive[] {
+  const obj = asObj(state);
+  if (!obj) return [];
+  const byChannel = new Map<string, ActiveLive>();
+
+  for (const [presenceKey, value] of Object.entries(obj)) {
+    const entries = Array.isArray(value) ? value : [];
+    for (const entry of entries) {
+      const item = asObj(entry);
+      if (!item || String(item["type"] || "") !== "host") continue;
+      const channel = sanitizeText(String(item["channel"] || ""), 32);
+      if (!channel) continue;
+      const uid = String(item["uid"] || "").trim();
+      const live: ActiveLive = {
+        key: `${channel}:${uid || presenceKey}`,
+        channel,
+        name: sanitizeText(String(item["name"] || ""), 18) || "lahza",
+        uid,
+        at: String(item["at"] || ""),
+      };
+      byChannel.set(channel, live);
+    }
+  }
+
+  return Array.from(byChannel.values()).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+}
+
 export default function LiveClient() {
   const gold = "#C9A24D";
   const border = "rgba(255,255,255,0.12)";
@@ -114,7 +153,7 @@ export default function LiveClient() {
   }, [searchParams]);
   const initialRole = React.useMemo<Role>(() => {
     const r = String(searchParams.get("role") || "").trim();
-    return r === "audience" ? "audience" : "host";
+    return r === "host" ? "host" : "audience";
   }, [searchParams]);
 
   const appIdEnv = String(process.env.NEXT_PUBLIC_AGORA_APP_ID || "").trim();
@@ -122,8 +161,8 @@ export default function LiveClient() {
   const [envChecked, setEnvChecked] = React.useState(!!appIdEnv);
   const supabase = React.useMemo(() => buildSupabaseClient(), []);
 
-  const [channel] = React.useState(initialChannel);
-  const [role] = React.useState<Role>(initialRole);
+  const [channel, setChannel] = React.useState(initialChannel);
+  const [role, setRole] = React.useState<Role>(initialRole);
   const [busy, setBusy] = React.useState(false);
   const [toast, setToast] = React.useState("");
   const toastRef = React.useRef("");
@@ -157,6 +196,7 @@ export default function LiveClient() {
   const [scores, setScores] = React.useState<Record<string, number>>({});
   const [viewers, setViewers] = React.useState(0);
   const [realtimeConnected, setRealtimeConnected] = React.useState(false);
+  const [activeLives, setActiveLives] = React.useState<ActiveLive[]>([]);
 
   const [targetUid, setTargetUid] = React.useState<string>("");
 
@@ -165,6 +205,7 @@ export default function LiveClient() {
   const giftTimersRef = React.useRef<Map<string, number>>(new Map());
 
   const chatChannelRef = React.useRef<RealtimeChannel | null>(null);
+  const lobbyChannelRef = React.useRef<RealtimeChannel | null>(null);
   const realtimeRetryRef = React.useRef<number | null>(null);
   const realtimeAttemptRef = React.useRef(0);
   const localRealtimeRef = React.useRef(false);
@@ -177,6 +218,31 @@ export default function LiveClient() {
   const clearRealtimeRetry = React.useCallback(() => {
     if (realtimeRetryRef.current) window.clearTimeout(realtimeRetryRef.current);
     realtimeRetryRef.current = null;
+  }, []);
+
+  const trackLobbyHost = React.useCallback(
+    async (chName: string, uid: number) => {
+      const lobby = lobbyChannelRef.current;
+      if (!lobby) return;
+      try {
+        await lobby.track({
+          type: "host",
+          channel: chName,
+          name: meName || "lahza",
+          uid: String(uid),
+          at: nowIso(),
+        });
+      } catch {}
+    },
+    [meName]
+  );
+
+  const untrackLobbyHost = React.useCallback(async () => {
+    const lobby = lobbyChannelRef.current;
+    if (!lobby) return;
+    try {
+      await lobby.untrack();
+    } catch {}
   }, []);
 
   const stopLocalRealtime = React.useCallback(() => {
@@ -240,6 +306,39 @@ export default function LiveClient() {
     } catch {}
   }, [meKey]);
 
+  React.useEffect(() => {
+    if (!supabase || isLocalModeEnabled()) {
+      setActiveLives([]);
+      return;
+    }
+
+    const lobby = supabase.channel("live:lobby", {
+      config: { presence: { key: `viewer:${meKey || safeId()}` } },
+    });
+    lobbyChannelRef.current = lobby;
+
+    const syncLives = () => {
+      try {
+        setActiveLives(activeLivesFromPresenceState(lobby.presenceState()));
+      } catch {
+        setActiveLives([]);
+      }
+    };
+
+    lobby.on("presence", { event: "sync" }, syncLives);
+    lobby.subscribe((status: string) => {
+      if (status === "SUBSCRIBED") syncLives();
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setActiveLives([]);
+    });
+
+    return () => {
+      if (lobbyChannelRef.current === lobby) lobbyChannelRef.current = null;
+      try {
+        void supabase.removeChannel(lobby);
+      } catch {}
+    };
+  }, [meKey, supabase]);
+
   const stopTracks = React.useCallback(async () => {
     const t = localTracksRef.current;
     try {
@@ -260,9 +359,44 @@ export default function LiveClient() {
     } catch {}
   }, []);
 
+  const announceLiveRoom = React.useCallback(async () => {
+    const res = await fetch("/live/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: "{}",
+    });
+    const json = (await res.json().catch(() => null)) as {
+      ok?: unknown;
+      message?: unknown;
+      room?: { channel?: unknown };
+    } | null;
+    if (!res.ok || !json || !json.ok) {
+      const m = json && typeof json.message === "string" ? String(json.message).trim() : "";
+      throw new Error(m || "تعذر تسجيل البث.");
+    }
+    return sanitizeText(String(json.room?.channel || ""), 32);
+  }, []);
+
+  const closeLiveRoom = React.useCallback(async () => {
+    try {
+      await fetch("/live/end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: "{}",
+      });
+    } catch {}
+  }, []);
+
   const leave = React.useCallback(async (finalToast?: string) => {
     setBusy(true);
     try {
+      const wasHost = joinInfoRef.current?.role === "host";
+      if (wasHost) {
+        await untrackLobbyHost();
+        await closeLiveRoom();
+      }
       clearRealtimeRetry();
       realtimeAttemptRef.current = 0;
       try {
@@ -300,7 +434,7 @@ export default function LiveClient() {
     } finally {
       setBusy(false);
     }
-  }, [clearRealtimeRetry, stopLocalRealtime, stopTracks, supabase]);
+  }, [clearRealtimeRetry, closeLiveRoom, stopLocalRealtime, stopTracks, supabase, untrackLobbyHost]);
 
   React.useEffect(() => {
     return () => {
@@ -722,13 +856,14 @@ export default function LiveClient() {
     [addReaction, emitLocalEvent, localUid, meKey, meName, realtimeConnected, targetUid]
   );
 
-  const join = React.useCallback(async () => {
-    const ch = String(channel || "").trim();
-    if (!ch) {
+  const join = React.useCallback(async (nextRole: Role = role, nextChannel?: string) => {
+    const activeRole = nextRole;
+    let ch = sanitizeText(String(nextChannel || channel || "").trim(), 32);
+    if (!ch && activeRole !== "host") {
       setToast("اكتب اسم القناة");
       return;
     }
-    if (role === "host") {
+    if (activeRole === "host") {
       try {
         if (typeof window !== "undefined" && !window.isSecureContext) {
           setToast("يلزم فتح الموقع عبر HTTPS لتشغيل الكاميرا والمايك.");
@@ -738,7 +873,16 @@ export default function LiveClient() {
     }
     setBusy(true);
     setToast("");
+    let roomOpened = false;
     try {
+      if (activeRole === "host") {
+        const roomChannel = await announceLiveRoom();
+        roomOpened = true;
+        if (roomChannel) ch = roomChannel;
+      }
+      if (!ch) {
+        throw new Error("اكتب اسم القناة");
+      }
       if (!rtcRef.current) {
         const mod = (await import("agora-rtc-sdk-ng")) as unknown as { default: AgoraRTCDefault };
         rtcRef.current = mod.default;
@@ -817,9 +961,9 @@ export default function LiveClient() {
       });
 
       const uid = Math.floor((crypto.getRandomValues(new Uint32Array(1))[0] || Date.now()) % 1_000_000_000);
-      joinInfoRef.current = { channel: ch, uid, role };
+      joinInfoRef.current = { channel: ch, uid, role: activeRole };
 
-      if (role === "host") {
+      if (activeRole === "host") {
         const [mic, cam] = await AgoraRTC.createMicrophoneAndCameraTracks({}, {});
         localTracksRef.current = { mic, cam };
         if (localVideoRef.current) {
@@ -828,7 +972,7 @@ export default function LiveClient() {
         }
       }
 
-      const fetched = await fetchAgoraToken(ch, uid, role);
+      const fetched = await fetchAgoraToken(ch, uid, activeRole);
       const resolvedAppId = String(fetched.appId || agoraAppId || "").trim();
       if (!resolvedAppId) {
         await leave("إعدادات البث غير مكتملة على السيرفر.");
@@ -836,25 +980,29 @@ export default function LiveClient() {
       }
       if (fetched.appId && fetched.appId !== agoraAppId) setAgoraAppId(fetched.appId);
 
-      await client.setClientRole(role === "host" ? "host" : "audience");
+      await client.setClientRole(activeRole === "host" ? "host" : "audience");
       await client.join(resolvedAppId, ch, fetched.token, uid);
+      setRole(activeRole);
+      setChannel(ch);
       setLocalUid(String(uid));
       setJoined(true);
-      setToast(role === "host" ? "تم بدء البث" : "تم الانضمام");
+      setToast(activeRole === "host" ? "تم بدء البث" : "تم الانضمام");
       await startRealtime(ch);
 
-      if (role === "host") {
+      if (activeRole === "host") {
         const { mic, cam } = localTracksRef.current;
         if (!mic || !cam) throw new Error("tracks_missing");
         await client.publish([mic, cam]);
+        await trackLobbyHost(ch, uid);
       }
     } catch (e: unknown) {
       const msg = normalizeAgoraJoinError(e);
+      if (roomOpened) await closeLiveRoom();
       await leave(msg);
     } finally {
       setBusy(false);
     }
-  }, [agoraAppId, channel, fetchAgoraToken, leave, playRemote, role, startRealtime]);
+  }, [agoraAppId, announceLiveRoom, channel, fetchAgoraToken, leave, playRemote, role, startRealtime, trackLobbyHost]);
 
   const localScore = scores[localUid] || 0;
   const remoteScore = primaryRemote ? scores[String(primaryRemote.uid)] || 0 : 0;
@@ -1081,25 +1229,7 @@ export default function LiveClient() {
           >
             {role === "host" ? "إنهاء" : "مغادرة"}
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void join()}
-            disabled={busy}
-            style={{
-              height: 42,
-              borderRadius: 999,
-              border: `1px solid rgba(0,0,0,0.18)`,
-              background: gold,
-              color: "#0B0B0D",
-              fontWeight: 1000,
-              paddingInline: 14,
-              cursor: "pointer",
-            }}
-          >
-            {role === "host" ? "بدء" : "انضمام"}
-          </button>
-        )}
+        ) : null}
       </div>
 
       {envChecked && !agoraAppId ? (
@@ -1126,6 +1256,108 @@ export default function LiveClient() {
           }}
         >
           أضف AGORA_APP_CERTIFICATE و AGORA_APP_ID
+        </div>
+      ) : null}
+
+      {!joined ? (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 25,
+            display: "grid",
+            placeItems: "center",
+            padding: 18,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              borderRadius: 22,
+              border: `1px solid ${border}`,
+              background: "rgba(0,0,0,0.46)",
+              backdropFilter: "blur(12px)",
+              padding: 14,
+              display: "grid",
+              gap: 12,
+              pointerEvents: "auto",
+              boxShadow: "0 24px 70px rgba(0,0,0,0.55)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div style={{ fontWeight: 1000, fontSize: 16 }}>البثوث المباشرة</div>
+              <button
+                type="button"
+                onClick={() => void join("host", channel || "lahza")}
+                disabled={busy}
+                style={{
+                  height: 40,
+                  borderRadius: 999,
+                  border: "1px solid rgba(0,0,0,0.18)",
+                  background: gold,
+                  color: "#0B0B0D",
+                  fontWeight: 1000,
+                  paddingInline: 14,
+                  cursor: busy ? "not-allowed" : "pointer",
+                  opacity: busy ? 0.7 : 1,
+                }}
+              >
+                بدء بث
+              </button>
+            </div>
+
+            {activeLives.length ? (
+              <div style={{ display: "grid", gap: 10 }}>
+                {activeLives.map((live) => (
+                  <button
+                    key={live.key}
+                    type="button"
+                    onClick={() => void join("audience", live.channel)}
+                    disabled={busy}
+                    style={{
+                      width: "100%",
+                      textAlign: "right",
+                      borderRadius: 18,
+                      border: `1px solid ${border}`,
+                      background: "rgba(255,255,255,0.05)",
+                      color: "#FFFFFF",
+                      padding: 12,
+                      cursor: busy ? "not-allowed" : "pointer",
+                      display: "grid",
+                      gap: 6,
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                      <span style={{ fontWeight: 1000, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 999, background: "#EF4444" }} />
+                        بث مباشر
+                      </span>
+                      <span style={{ color: gold, fontWeight: 1000 }}>مشاهدة</span>
+                    </div>
+                    <div style={{ fontWeight: 1000 }}>{live.name}</div>
+                    <div style={{ opacity: 0.74, fontWeight: 900, fontSize: 12 }}>القناة: {live.channel}</div>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div
+                style={{
+                  borderRadius: 18,
+                  border: `1px solid ${border}`,
+                  background: "rgba(255,255,255,0.04)",
+                  padding: 14,
+                  fontWeight: 900,
+                  lineHeight: 1.7,
+                  opacity: 0.92,
+                }}
+              >
+                لا توجد بثوث مباشرة الآن.
+              </div>
+            )}
+          </div>
         </div>
       ) : null}
 

@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { supabaseServer } from "@/lib/supabase/server";
+import { authErrorResponse, getAuthenticatedUser, userEmailVerified } from "@/lib/supabase/auth";
 
 const MAX_BYTES = 25 * 1024 * 1024;
-
-type UserLike = {
-  email_confirmed_at?: unknown;
-  confirmed_at?: unknown;
-};
+const ALLOWED_MEDIA_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+]);
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -23,8 +27,13 @@ function inferExt(contentType: string) {
   if (t.includes("mov")) return "mov";
   if (t.includes("jpeg") || t.includes("jpg")) return "jpg";
   if (t.includes("png")) return "png";
+  if (t.includes("webp")) return "webp";
   if (t.includes("gif")) return "gif";
   return "bin";
+}
+
+function normalizeContentType(raw: string) {
+  return String(raw || "application/octet-stream").split(";")[0].trim().toLowerCase();
 }
 
 function safeUuid() {
@@ -36,17 +45,9 @@ function safeUuid() {
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseServer();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getAuthenticatedUser(req);
 
-    if (!user) {
-      return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-    }
-
-    const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-    if (!verified) {
+    if (!userEmailVerified(user)) {
       return NextResponse.json(
         { ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." },
         { status: 403 }
@@ -81,7 +82,13 @@ export async function POST(req: Request) {
       );
     }
 
-    const contentType = String(file.type || "application/octet-stream");
+    const contentType = normalizeContentType(file.type);
+    if (!ALLOWED_MEDIA_TYPES.has(contentType)) {
+      return NextResponse.json(
+        { ok: false, code: "bad_file", message: "file must be an image or video" },
+        { status: 400 }
+      );
+    }
     const ext = inferExt(contentType);
     const bucket = "moments-media";
     const path = `public/${Date.now()}-${safeUuid()}.${ext}`;
@@ -102,7 +109,9 @@ export async function POST(req: Request) {
     const publicUrl = String(data?.publicUrl || "").trim();
 
     return NextResponse.json({ ok: true, url: publicUrl }, { status: 200 });
-  } catch {
+  } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     return NextResponse.json(
       { ok: false, code: "server_error", message: "Internal error" },
       { status: 500 }

@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { supabaseServer } from "@/lib/supabase/server";
+import { authErrorResponse, bearerTokenFromRequest, getAuthenticatedUser, userEmailVerified, userId } from "@/lib/supabase/auth";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
 const MAX_BYTES = 25 * 1024 * 1024;
+const ALLOWED_MEDIA_TYPES = new Set([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+]);
 
 type UserLike = {
   id?: unknown;
@@ -100,22 +109,24 @@ function inferExt(contentType: string, originalName: string) {
   if (t.includes("mov")) return "mov";
   if (t.includes("jpeg") || t.includes("jpg")) return "jpg";
   if (t.includes("png")) return "png";
+  if (t.includes("webp")) return "webp";
   if (t.includes("gif")) return "gif";
   const ext = (String(originalName || "").split(".").pop() || "").trim().toLowerCase();
   return ext || "bin";
 }
 
+function normalizeContentType(raw: string) {
+  return String(raw || "application/octet-stream").split(";")[0].trim().toLowerCase();
+}
+
 function deriveUsername(user: unknown) {
   const u = user as UserLike | null;
   const meta = (u?.user_metadata || {}) as Record<string, unknown>;
-  const metaName =
-    (meta["username"] as string | undefined) ||
-    (meta["name"] as string | undefined) ||
-    (meta["full_name"] as string | undefined);
+  const handle = String(meta["username"] || "").trim();
+  if (handle) return handle;
   const email = typeof u?.email === "string" ? u.email : "";
   const phone = typeof u?.phone === "string" ? u.phone : "";
   const id = typeof u?.id === "string" ? u.id : "";
-  if (metaName && String(metaName).trim()) return String(metaName).trim();
   if (email.includes("@")) return String(email.split("@")[0] || "").trim();
   if (phone) return phone;
   if (id) return `مستخدم-${id.slice(0, 6)}`;
@@ -231,6 +242,10 @@ function clampCoord(raw: unknown) {
   return Number.isFinite(n) ? n : NaN;
 }
 
+function isValidLatLng(lat: number, lng: number) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
 export async function POST(req: Request) {
   try {
     const form = await req.formData();
@@ -245,17 +260,20 @@ export async function POST(req: Request) {
     if (file.size <= 0 || file.size > MAX_BYTES) {
       return NextResponse.json({ ok: false, code: "bad_file", message: "file too large" }, { status: 413 });
     }
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    const contentType = normalizeContentType(file.type);
+    if (!ALLOWED_MEDIA_TYPES.has(contentType)) {
+      return NextResponse.json({ ok: false, code: "bad_file", message: "file must be an image or video" }, { status: 400 });
+    }
+    if (!isValidLatLng(lat, lng)) {
       return NextResponse.json({ ok: false, code: "bad_request", message: "lat/lng required" }, { status: 400 });
     }
 
     const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 
-    if (isLocalMode()) {
+    if (isLocalMode() && !bearerTokenFromRequest(req)) {
       const me = await localMe(req);
       if (!me) return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
 
-      const contentType = String(file.type || "application/octet-stream");
       const ext = inferExt(contentType, file.name);
       const name = `${Date.now()}-${safeUuid()}.${ext}`;
       await fs.mkdir(localMediaDir(), { recursive: true });
@@ -298,17 +316,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const supabase = await supabaseServer();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const { user } = await getAuthenticatedUser(req);
 
-    if (!user) {
-      return NextResponse.json({ ok: false, code: "unauthorized", message: "يلزم تسجيل الدخول." }, { status: 401 });
-    }
-
-    const verified = !!((user as UserLike).email_confirmed_at || (user as UserLike).confirmed_at);
-    if (!verified) {
+    if (!userEmailVerified(user)) {
       return NextResponse.json({ ok: false, code: "unverified", message: "يلزم توثيق البريد أولًا." }, { status: 403 });
     }
 
@@ -320,7 +330,6 @@ export async function POST(req: Request) {
       );
     }
 
-    const contentType = String(file.type || "application/octet-stream");
     const ext = inferExt(contentType, file.name);
     const bucket = "moments-media";
     const storagePath = `public/map/${Date.now()}-${safeUuid()}.${ext}`;
@@ -334,13 +343,12 @@ export async function POST(req: Request) {
     const mediaUrl = String(data?.publicUrl || "").trim();
     if (!mediaUrl) return NextResponse.json({ ok: false, code: "upload_failed", message: "missing public url" }, { status: 500 });
 
-    const userId = String((user as UserLike | null)?.id || "").trim();
-    const profileUsername = await fetchProfileUsername(admin, userId);
+    const meId = userId(user);
+    const profileUsername = await fetchProfileUsername(admin, meId);
     const username = profileUsername || deriveUsername(user);
     const basePayload = { media_url: mediaUrl, lat, lng, expires_at: expiresAt };
-    const richPayload = { ...basePayload, user_id: userId || null, username: username || null };
-    const usernameOnlyPayload = { ...basePayload, username: username || null };
-    const userIdOnlyPayload = { ...basePayload, user_id: userId || null };
+    const richPayload = { ...basePayload, user_id: meId || null, username: username || null };
+    const userIdOnlyPayload = { ...basePayload, user_id: meId || null };
 
     type MapPostInsertRow = {
       id: unknown;
@@ -365,30 +373,21 @@ export async function POST(req: Request) {
       const missingUserId = isMissingColumnError(msg, "user_id");
       const missingUsername = isMissingColumnError(msg, "username");
       if (missingUserId || missingUsername) {
-        if (missingUserId && !missingUsername) {
-          const { data: d, error } = await admin
-            .from("map_posts")
-            .insert(usernameOnlyPayload)
-            .select("id,media_url,lat,lng,expires_at,username,created_at")
-            .single();
-          if (!error) row = (d as unknown as MapPostInsertRow | null) || null;
-        } else if (!missingUserId && missingUsername) {
+        if (missingUserId) {
+          return NextResponse.json(
+            { ok: false, code: "missing_column", message: 'يلزم إضافة عمود user_id لجدول map_posts.' },
+            { status: 500 }
+          );
+        }
+        if (missingUsername) {
           const { data: d, error } = await admin
             .from("map_posts")
             .insert(userIdOnlyPayload)
-            .select("id,media_url,lat,lng,expires_at,username,created_at")
+            .select("id,media_url,lat,lng,expires_at,created_at")
             .single();
           if (!error) row = (d as unknown as MapPostInsertRow | null) || null;
         }
-        if (!row) {
-          const { data: d, error: baseErr } = await admin
-            .from("map_posts")
-            .insert(basePayload)
-            .select("id,media_url,lat,lng,expires_at,username,created_at")
-            .single();
-          if (baseErr) return NextResponse.json({ ok: false, code: "insert_failed", message: baseErr.message }, { status: 500 });
-          row = (d as unknown as MapPostInsertRow | null) || null;
-        }
+        if (!row) return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
       } else {
         return NextResponse.json({ ok: false, code: "insert_failed", message: richErr.message }, { status: 500 });
       }
@@ -423,6 +422,8 @@ export async function POST(req: Request) {
       { status: 200 }
     );
   } catch (e: unknown) {
+    const authRes = authErrorResponse(e);
+    if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return NextResponse.json({ ok: false, code: "server_error", message }, { status: 500 });
   }
