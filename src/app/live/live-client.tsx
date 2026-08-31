@@ -1162,7 +1162,7 @@ export default function LiveClient() {
         }}
       >
         <Link
-          href="/feed"
+          href="/"
           style={{
             width: 44,
             height: 44,

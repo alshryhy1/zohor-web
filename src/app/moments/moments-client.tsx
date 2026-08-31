@@ -1029,7 +1029,7 @@ export default function MomentsClient({
         }}
       >
         <Link
-          href="/feed"
+          href="/"
           style={{
             width: 44,
             height: 44,

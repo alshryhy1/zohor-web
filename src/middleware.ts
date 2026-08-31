@@ -12,8 +12,8 @@ function isLocalMode() {
 }
 
 export async function middleware(req: NextRequest) {
-  if (req.nextUrl.pathname === "/") {
-    return NextResponse.redirect(new URL("/feed", req.url));
+  if (req.nextUrl.pathname === "/feed" || req.nextUrl.pathname === "/feed/") {
+    return NextResponse.redirect(new URL("/", req.url));
   }
 
   const res = NextResponse.next();

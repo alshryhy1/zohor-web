@@ -288,7 +288,7 @@ export default function BottomNav() {
     };
   }, [supabase]);
 
-  if (pathname !== "/feed") return null;
+  if (pathname !== "/") return null;
 
   const bg = "rgba(12,12,14,0.86)";
   const border = "rgba(255,255,255,0.10)";

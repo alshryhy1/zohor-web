@@ -802,7 +802,7 @@ export default function MapClient({
         }}
       >
         <Link
-          href="/feed"
+          href="/"
           style={{
             width: 44,
             height: 44,
