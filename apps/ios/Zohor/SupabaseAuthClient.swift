@@ -59,7 +59,13 @@ actor SupabaseAuthClient {
         request.httpBody = try JSONEncoder.zohor.encode(Body(email: email, password: password))
 
         let response: AuthTokenResponse = try await perform(request)
-        return response.userSession
+        if let session = response.userSession {
+            return session
+        }
+        return try await sessionFromTokens(
+            accessToken: response.accessToken,
+            refreshToken: response.refreshToken
+        )
     }
 
     func signUp(email: String, password: String, name: String, username: String) async throws -> UserSession? {
@@ -130,7 +136,29 @@ actor SupabaseAuthClient {
         request.httpBody = try JSONEncoder.zohor.encode(Body(refreshToken: refreshToken))
 
         let response: AuthTokenResponse = try await perform(request)
-        return response.userSession
+        if let session = response.userSession {
+            return session
+        }
+        return try await sessionFromTokens(
+            accessToken: response.accessToken,
+            refreshToken: response.refreshToken
+        )
+    }
+
+    private func sessionFromTokens(accessToken: String, refreshToken: String) async throws -> UserSession {
+        var request = URLRequest(url: config.supabaseURL.appendingPathComponent("auth/v1/user"))
+        request.httpMethod = "GET"
+        request.setValue(config.supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let user: AuthUser = try await perform(request)
+        return UserSession(
+            userId: user.id,
+            email: user.email ?? "",
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            emailVerified: user.emailConfirmedAt != nil || user.confirmedAt != nil
+        )
     }
 
     private func perform<Response: Decodable>(_ request: URLRequest) async throws -> Response {
@@ -154,10 +182,11 @@ actor SupabaseAuthClient {
 private struct AuthTokenResponse: Decodable {
     let accessToken: String
     let refreshToken: String
-    let user: AuthUser
+    let user: AuthUser?
 
-    var userSession: UserSession {
-        UserSession(
+    var userSession: UserSession? {
+        guard let user else { return nil }
+        return UserSession(
             userId: user.id,
             email: user.email ?? "",
             accessToken: accessToken,

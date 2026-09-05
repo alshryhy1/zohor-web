@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { authErrorResponse, getAuthenticatedUser, userEmailVerified, userId } from "@/lib/supabase/auth";
 import { canModerate, canWriteVoiceComments, isBanned, isKicked, isMuted, roomStaff } from "@/lib/live-access";
+import {
+  acceptVoiceHandoff,
+  offerHandoff,
+  pendingHandoffForRoom,
+  rejectHandoff,
+} from "@/lib/room-handoff";
 
 function buildSupabaseAdmin() {
   const url = String(process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
@@ -136,6 +142,7 @@ async function roomPayload(
     moderatorCap: 5,
   };
   const blocked = staff.banned || staff.kicked;
+  const handoff = roomId ? await pendingHandoffForRoom(admin, "voice", roomId, viewerId) : null;
   return {
     ok: true,
     room: room && !blocked
@@ -154,6 +161,7 @@ async function roomPayload(
     canComment: !blocked && hostId ? await canWriteVoiceComments(admin, viewerId, hostId) : false,
     speakerCap: VOICE_SPEAKER_CAP,
     speakerCount: speakerCount(seats),
+    handoff,
     ...staff,
   };
 }
@@ -180,6 +188,7 @@ export async function POST(req: Request) {
       text?: unknown;
       backdropUrl?: unknown;
       filterKey?: unknown;
+      roomId?: unknown;
     } | null;
     const action = String(body?.action || "list").trim();
     const username = String((user as { user_metadata?: Record<string, unknown> }).user_metadata?.username || "").trim();
@@ -255,6 +264,7 @@ export async function POST(req: Request) {
       const { data: mine } = await admin.from("voice_rooms").select("id").eq("host_user_id", meId).maybeSingle();
       const roomId = String((mine as { id?: unknown } | null)?.id || "").trim();
       if (roomId) {
+        await admin.from("room_handoffs").update({ status: "cancelled" }).eq("kind", "voice").eq("room_id", roomId).eq("status", "pending");
         await admin.from("voice_room_seats").delete().eq("room_id", roomId);
         await admin.from("voice_room_comments").delete().eq("host_user_id", meId);
         await admin.from("voice_rooms").delete().eq("id", roomId);
@@ -303,12 +313,19 @@ export async function POST(req: Request) {
     }
 
     const hostId = String(body?.hostUserId || "").trim() || meId;
-    const withBackdrop = await admin
-      .from("voice_rooms")
-      .select("id,host_user_id,username,channel,backdrop_url,filter_key")
-      .eq("host_user_id", hostId)
-      .maybeSingle();
-    const { data: room } = withBackdrop.error
+    const roomIdParam = String((body as { roomId?: unknown })?.roomId || "").trim();
+    const withBackdrop = roomIdParam
+      ? await admin
+          .from("voice_rooms")
+          .select("id,host_user_id,username,channel,backdrop_url,filter_key")
+          .eq("id", roomIdParam)
+          .maybeSingle()
+      : await admin
+          .from("voice_rooms")
+          .select("id,host_user_id,username,channel,backdrop_url,filter_key")
+          .eq("host_user_id", hostId)
+          .maybeSingle();
+    const { data: room } = withBackdrop.error && !roomIdParam
       ? await admin.from("voice_rooms").select("id,host_user_id,username,channel").eq("host_user_id", hostId).maybeSingle()
       : withBackdrop;
     const roomId = String((room as { id?: unknown } | null)?.id || "").trim();
@@ -358,6 +375,44 @@ export async function POST(req: Request) {
         await admin.from("voice_room_seats").delete().eq("room_id", roomId).eq("user_id", meId);
       }
       return NextResponse.json({ ok: true, room: null, seats: [], comments: [] });
+    }
+
+    if (action === "offer_host") {
+      if (!roomId || !room || meId !== hostId) {
+        return NextResponse.json({ ok: false, code: "forbidden", message: "تسليم الغرفة لصاحبها فقط." }, { status: 403 });
+      }
+      const targetId = String(body?.userId || "").trim();
+      const seats = await seatsOf(admin, roomId);
+      if (!targetId || targetId === meId || !seats.some((row) => row.userId === targetId)) {
+        return NextResponse.json({ ok: false, code: "bad_request", message: "اختر شخصًا حاضرًا في الغرفة." }, { status: 400 });
+      }
+      const offered = await offerHandoff(admin, "voice", roomId, String(room.channel || ""), meId, targetId);
+      if (!offered.ok) {
+        return NextResponse.json({ ok: false, code: offered.code, message: offered.message }, { status: 400 });
+      }
+      return NextResponse.json(await roomPayload(admin, room, meId));
+    }
+
+    if (action === "accept_host") {
+      if (!roomId) {
+        return NextResponse.json({ ok: false, code: "not_live", message: "الغرفة الصوتية غير قائمة." }, { status: 400 });
+      }
+      const accepted = await acceptVoiceHandoff(admin, roomId, meId, username);
+      if (!accepted.ok) {
+        return NextResponse.json({ ok: false, code: accepted.code, message: accepted.message }, { status: 400 });
+      }
+      return NextResponse.json(await roomPayload(admin, accepted.room, meId));
+    }
+
+    if (action === "reject_host") {
+      if (!roomId) {
+        return NextResponse.json({ ok: false, code: "not_live", message: "الغرفة الصوتية غير قائمة." }, { status: 400 });
+      }
+      const rejected = await rejectHandoff(admin, "voice", roomId, meId);
+      if (!rejected.ok) {
+        return NextResponse.json({ ok: false, code: rejected.code, message: rejected.message }, { status: 400 });
+      }
+      return NextResponse.json(await roomPayload(admin, room, meId));
     }
 
     if (action === "comment") {

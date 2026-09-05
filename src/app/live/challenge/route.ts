@@ -15,6 +15,13 @@ function liveChannel(userId: string) {
   return `l${compact || String(Date.now())}`.slice(0, 32);
 }
 
+/** Shared Agora stage for multi-host challenge (architecture A). */
+function challengeChannel(challengeId: string) {
+  const compact = String(challengeId || "").replace(/-/g, "");
+  if (!compact) return "";
+  return `c${compact}`.slice(0, 32);
+}
+
 async function ensureLiveRoom(admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>, meId: string, username: string) {
   const { data: existing } = await admin.from("live_rooms").select("id,user_id,username,channel").eq("user_id", meId).maybeSingle();
   if (existing) return existing;
@@ -89,6 +96,40 @@ async function ownOpenChallenge(admin: NonNullable<ReturnType<typeof buildSupaba
     .limit(1)
     .maybeSingle();
   return data;
+}
+
+/**
+ * Challenge board for a host or anyone watching them.
+ * Prefer an open challenge where they sit as guest (shared stage), else their owned open challenge.
+ */
+async function challengeForHost(admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>, hostId: string) {
+  const { data: seatRows } = await admin.from("live_challenge_seats").select("challenge_id").eq("user_id", hostId);
+  const ids = [
+    ...new Set(
+      (seatRows || [])
+        .map((row) => String((row as { challenge_id?: unknown }).challenge_id || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+  if (ids.length) {
+    const withMode = await admin
+      .from("live_challenges")
+      .select("id,created_by,status,seek_until,mode")
+      .in("id", ids)
+      .eq("status", "open");
+    const rows = !withMode.error
+      ? withMode.data || []
+      : (
+          await admin
+            .from("live_challenges")
+            .select("id,created_by,status,seek_until")
+            .in("id", ids)
+            .eq("status", "open")
+        ).data || [];
+    const asGuest = rows.find((row) => String((row as { created_by?: unknown }).created_by || "") !== hostId);
+    if (asGuest) return asGuest;
+  }
+  return ownOpenChallenge(admin, hostId);
 }
 
 async function insertSeat(
@@ -270,7 +311,28 @@ async function incomingFor(admin: NonNullable<ReturnType<typeof buildSupabaseAdm
   return (await incomingInvite(admin, meId)) || (await incomingSeek(admin, meId));
 }
 
-function payload(
+async function outgoingInviteSeconds(
+  admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>,
+  challengeId: string
+) {
+  if (!challengeId) return 0;
+  try {
+    const { data } = await admin
+      .from("live_challenge_invites")
+      .select("expires_at")
+      .eq("challenge_id", challengeId)
+      .gt("expires_at", new Date().toISOString())
+      .order("expires_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return secondsLeft((data as { expires_at?: unknown } | null)?.expires_at);
+  } catch {
+    return 0;
+  }
+}
+
+async function payload(
+  admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>,
   challenge: { id?: unknown; created_by?: unknown; status?: unknown; seek_until?: unknown; mode?: unknown } | null,
   seats: Awaited<ReturnType<typeof seatsPayload>>,
   extra: { incoming?: Awaited<ReturnType<typeof incomingFor>> } = {}
@@ -280,6 +342,7 @@ function payload(
   const mode = asMode(challenge?.mode);
   const teamA = seats.filter((row) => row.team === 0).reduce((sum, row) => sum + (row.userId ? row.score : 0), 0);
   const teamB = seats.filter((row) => row.team === 1).reduce((sum, row) => sum + (row.userId ? row.score : 0), 0);
+  const pendingInviteSeconds = id ? await outgoingInviteSeconds(admin, id) : 0;
   return {
     ok: true,
     challenge: id
@@ -290,8 +353,10 @@ function payload(
           mode,
           capacity: modeCapacity(mode),
           seekingSeconds: seeking,
+          pendingInviteSeconds,
           teamA,
           teamB,
+          channel: challengeChannel(id),
         }
       : null,
     seats,
@@ -356,7 +421,7 @@ export async function POST(req: Request) {
           await insertSeat(admin, challengeId, meId, 0, await readMode(admin, challenge));
         }
       }
-      return NextResponse.json(payload(challenge, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, challenge, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "set_mode") {
@@ -387,7 +452,7 @@ export async function POST(req: Request) {
           .eq("challenge_id", challengeId)
           .eq("seat", seat);
       }
-      return NextResponse.json(payload(updated.data || { ...(mine as object), mode }, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, updated.data || { ...(mine as object), mode }, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "invite") {
@@ -405,7 +470,7 @@ export async function POST(req: Request) {
       }
       const { data: taken } = await admin.from("live_challenge_seats").select("seat,user_id").eq("challenge_id", challengeId);
       if ((taken || []).some((row) => String((row as { user_id?: unknown }).user_id || "") === guestId)) {
-        return NextResponse.json(payload(mine, await seatsPayload(admin, challengeId)));
+        return NextResponse.json(await payload(admin, mine, await seatsPayload(admin, challengeId)));
       }
       const mode = await readMode(admin, mine);
       if (nextGuestSeat(taken || [], mode) == null) {
@@ -422,7 +487,7 @@ export async function POST(req: Request) {
           { status: 400 }
         );
       }
-      return NextResponse.json(payload(mine, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, mine, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "seek" || action === "random") {
@@ -446,7 +511,7 @@ export async function POST(req: Request) {
       if (error) {
         return NextResponse.json({ ok: false, code: "need_sql", message: "شغّل SUPABASE_LIVE_SEEK.sql أولًا." }, { status: 400 });
       }
-      return NextResponse.json(payload({ ...(updated || mine as object), mode }, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, { ...(updated || mine as object), mode }, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "cancel_seek") {
@@ -455,7 +520,7 @@ export async function POST(req: Request) {
       if (challengeId) {
         await admin.from("live_challenges").update({ seek_until: null }).eq("id", challengeId);
       }
-      return NextResponse.json(payload(await ownOpenChallenge(admin, meId), await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, await ownOpenChallenge(admin, meId), await seatsPayload(admin, challengeId)));
     }
 
     if (action === "decline") {
@@ -466,10 +531,10 @@ export async function POST(req: Request) {
         await admin.from("live_challenge_invites").delete().eq("guest_user_id", meId);
       }
       const hostUserId = String(body?.hostUserId || "").trim() || meId;
-      const challenge = await ownOpenChallenge(admin, hostUserId);
+      const challenge = await challengeForHost(admin, hostUserId);
       const id = String((challenge as { id?: unknown } | null)?.id || "").trim();
       return NextResponse.json(
-        payload(challenge, await seatsPayload(admin, id), { incoming: await incomingFor(admin, meId) })
+        await payload(admin, challenge, await seatsPayload(admin, id), { incoming: await incomingFor(admin, meId) })
       );
     }
 
@@ -515,7 +580,7 @@ export async function POST(req: Request) {
       if ((taken || []).some((row) => String((row as { user_id?: unknown }).user_id || "") === meId)) {
         await admin.from("live_challenges").update({ seek_until: null }).eq("id", challengeId);
         await admin.from("live_challenge_invites").delete().eq("challenge_id", challengeId).eq("guest_user_id", meId);
-        return NextResponse.json(payload(target, await seatsPayload(admin, challengeId)));
+        return NextResponse.json(await payload(admin, target, await seatsPayload(admin, challengeId)));
       }
       const mode = await readMode(admin, target);
       const seat = nextGuestSeat(taken || [], mode);
@@ -525,7 +590,7 @@ export async function POST(req: Request) {
       await insertSeat(admin, challengeId, meId, seat, mode);
       await admin.from("live_challenges").update({ seek_until: null }).eq("id", challengeId);
       await admin.from("live_challenge_invites").delete().eq("challenge_id", challengeId).eq("guest_user_id", meId);
-      return NextResponse.json(payload(target, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, target, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "uninvite") {
@@ -537,7 +602,7 @@ export async function POST(req: Request) {
       }
       await admin.from("live_challenge_seats").delete().eq("challenge_id", challengeId).eq("user_id", guestId);
       await admin.from("live_challenge_invites").delete().eq("challenge_id", challengeId).eq("guest_user_id", guestId);
-      return NextResponse.json(payload(mine, await seatsPayload(admin, challengeId)));
+      return NextResponse.json(await payload(admin, mine, await seatsPayload(admin, challengeId)));
     }
 
     if (action === "leave") {
@@ -553,11 +618,11 @@ export async function POST(req: Request) {
 
     await expireSeeks(admin);
     const hostUserId = String(body?.hostUserId || "").trim() || meId;
-    const challenge = await ownOpenChallenge(admin, hostUserId);
+    const challenge = await challengeForHost(admin, hostUserId);
     const id = String((challenge as { id?: unknown } | null)?.id || "").trim();
     const mode = await readMode(admin, challenge);
     return NextResponse.json(
-      payload(
+      await payload(admin, 
         challenge ? { ...(challenge as object), mode } : null,
         await seatsPayload(admin, id),
         { incoming: await incomingFor(admin, meId) }

@@ -73,13 +73,29 @@ struct Profile: Codable, Equatable {
     var phone: String
     var displayName: String?
     var avatarUrl: URL?
+    var canChangeUsername: Bool = true
+    var usernameUnlockAt: Date? = nil
 
-    init(id: String, username: String, phone: String, displayName: String? = nil, avatarUrl: URL? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case id, username, phone, displayName, avatarUrl, canChangeUsername, usernameUnlockAt
+    }
+
+    init(
+        id: String,
+        username: String,
+        phone: String,
+        displayName: String? = nil,
+        avatarUrl: URL? = nil,
+        canChangeUsername: Bool = true,
+        usernameUnlockAt: Date? = nil
+    ) {
         self.id = id
         self.username = username
         self.phone = phone
         self.displayName = displayName
         self.avatarUrl = avatarUrl
+        self.canChangeUsername = canChangeUsername
+        self.usernameUnlockAt = usernameUnlockAt
     }
 
     init(from decoder: Decoder) throws {
@@ -91,6 +107,12 @@ struct Profile: Codable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         displayName = (rawName?.isEmpty == false) ? rawName : nil
         avatarUrl = IdentityMedia.url(try container.decodeIfPresent(String.self, forKey: .avatarUrl))
+        canChangeUsername = try container.decodeIfPresent(Bool.self, forKey: .canChangeUsername) ?? true
+        if let raw = try container.decodeIfPresent(String.self, forKey: .usernameUnlockAt) {
+            usernameUnlockAt = ZohorDate.parse(raw)
+        } else {
+            usernameUnlockAt = nil
+        }
     }
 }
 
@@ -339,14 +361,20 @@ struct LiveChallenge: Equatable {
     var mode: LiveChallengeMode = .duel
     var seats: [LiveSeat] = (0..<4).map { LiveSeat(index: $0) }
     var seekingSeconds: Int = 0
+    /// Seconds left on a direct invite the host sent (0 = none / declined / expired).
+    var pendingInviteSeconds: Int = 0
     var incoming: LiveIncoming? = nil
     var teamA = 0
     var teamB = 0
+    /// Shared Agora channel when multi-host stage is active (derived server-side).
+    var channel: String = ""
 
     var seatedCount: Int { seats.filter { !$0.isEmpty }.count }
     var isSeeking: Bool { seekingSeconds > 0 }
     var giftCount: Int { seats.reduce(0) { $0 + $1.giftCount } }
     var capacity: Int { mode.capacity }
+    /// Real multi-host video stage (2+ seated publishers on shared channel).
+    var hasSharedStage: Bool { seatedCount > 1 && !channel.isEmpty }
 }
 
 struct VoiceBoard: Equatable {
@@ -354,6 +382,28 @@ struct VoiceBoard: Equatable {
     var seats: [VoiceSeat] = []
     var comments: [LiveComment] = []
     var canComment = false
+    var staff = LiveRoomStaff()
+    var handoff: RoomHandoff? = nil
+}
+
+struct RoomHandoff: Equatable {
+    let id: String
+    let fromUserId: String
+    let toUserId: String
+    var fromName: String = ""
+    var toName: String = ""
+    let status: String
+    let kind: String
+    var role: String = ""
+    var expiresAt: Date? = nil
+
+    var isPending: Bool { status == "pending" }
+    var isRecipient: Bool { role == "recipient" }
+    var isSender: Bool { role == "sender" }
+}
+
+struct LiveHandoffBoard: Equatable {
+    var handoff: RoomHandoff? = nil
     var staff = LiveRoomStaff()
 }
 

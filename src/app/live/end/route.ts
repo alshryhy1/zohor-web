@@ -22,6 +22,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
     }
 
+    const { data: mine } = await admin.from("live_rooms").select("id").eq("user_id", meId).maybeSingle();
+    const roomId = String((mine as { id?: unknown } | null)?.id || "").trim();
+    if (roomId) {
+      await admin.from("room_handoffs").update({ status: "cancelled" }).eq("kind", "live").eq("room_id", roomId).eq("status", "pending");
+    }
     const { error } = await admin.from("live_rooms").delete().eq("user_id", meId);
     if (error) {
       return NextResponse.json({ ok: false, code: "end_failed", message: error.message }, { status: 500 });

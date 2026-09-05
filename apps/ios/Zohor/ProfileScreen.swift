@@ -77,27 +77,45 @@ final class ProfileViewModel: ObservableObject {
             photoMessage = (error as? LocalizedError)?.errorDescription ?? "تعذر حفظ الصورة."
         }
     }
+
+    func saveIdentity(displayName: String, username: String, using client: ZohorAPIClient?) async -> String? {
+        guard let client else { return "تعذر الحفظ." }
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let handle = username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "")
+        guard !name.isEmpty else { return "اكتب الاسم الظاهر." }
+        do {
+            try await client.saveAccount(username: handle, displayName: name, avatarUrl: profile?.avatarUrl)
+            await load(using: client)
+            return nil
+        } catch {
+            return (error as? LocalizedError)?.errorDescription ?? "تعذر حفظ الهوية."
+        }
+    }
 }
 
 struct ProfileScreen: View {
+    private enum Pane: Equatable {
+        case home
+        case wallet
+        case earnings
+        case editProfile
+        case security
+        case privacy
+        case notifications
+        case help
+    }
+
     @EnvironmentObject private var appState: AppState
     @StateObject private var model = ProfileViewModel()
     @State private var photoItem: PhotosPickerItem?
-    @State private var showSettings = false
     @State private var followList: FollowListKind?
+    @State private var pane: Pane = .home
 
     var body: some View {
         ZStack {
             ZohorDusk()
 
-            if showSettings {
-                AccountSettingsView(
-                    email: appState.session?.email,
-                    phone: model.profile?.phone,
-                    isVerified: appState.session?.emailVerified == true,
-                    onClose: { showSettings = false }
-                )
-            } else if let followList {
+            if let followList {
                 FollowPeopleScreen(kind: followList) {
                     self.followList = nil
                     Task { await model.refreshStats(using: appState.apiClient) }
@@ -107,7 +125,49 @@ struct ProfileScreen: View {
                     model.openedMoment = nil
                 }
             } else {
-                accountHome
+                switch pane {
+                case .home:
+                    accountHome
+                case .wallet:
+                    accountSubpage(title: "المحفظة") {
+                        ProfileWalletCard(client: appState.apiClient)
+                    }
+                case .earnings:
+                    accountSubpage(title: "أرباح البث") {
+                        HostPayoutCard(client: appState.apiClient)
+                    }
+                case .editProfile:
+                    accountSubpage(title: "تعديل الملف") {
+                        IdentityEditorView(profile: model.profile) { name, handle in
+                            if let error = await model.saveIdentity(displayName: name, username: handle, using: appState.apiClient) {
+                                return error
+                            }
+                            appState.profile = model.profile
+                            pane = .home
+                            return nil
+                        }
+                    }
+                case .security:
+                    accountSubpage(title: "الحساب والأمان") {
+                        AccountSettingsView(
+                            email: appState.session?.email,
+                            phone: model.profile?.phone,
+                            isVerified: appState.session?.emailVerified == true
+                        )
+                    }
+                case .privacy:
+                    accountSubpage(title: "الخصوصية") {
+                        AccountLinkList(kind: .privacy)
+                    }
+                case .notifications:
+                    accountSubpage(title: "الإشعارات") {
+                        AccountNotificationsView()
+                    }
+                case .help:
+                    accountSubpage(title: "المساعدة") {
+                        AccountLinkList(kind: .help)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -130,76 +190,90 @@ struct ProfileScreen: View {
         }
     }
 
-    private var accountHome: some View {
-        ScrollView(showsIndicators: false) {
-        VStack(alignment: .trailing, spacing: 18) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text("حسابي")
-                        .font(.system(size: 40, weight: .bold))
-                        .foregroundStyle(.white)
-                        .minimumScaleFactor(0.75)
-                    Text("هويتك داخل لحظاتك")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.62))
-                }
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                Button {
-                    showSettings = true
-                } label: {
-                    ZohorSettingsMark()
-                        .frame(width: 34, height: 34)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("الإعدادات")
+    private func accountSubpage<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            HStack {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                Button("رجوع") { pane = .home }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.78))
             }
             .padding(.horizontal, 24)
             .padding(.top, 14)
-            .accessibilityElement(children: .contain)
-
-            IdentityCard(
-                email: appState.session?.email,
-                profile: model.profile,
-                isSavingPhoto: model.isSavingPhoto,
-                photoItem: $photoItem
-            )
-            .padding(.horizontal, 24)
-
-            AccountStatsRow(stats: model.stats) { kind in
-                followList = kind
-            }
-            .padding(.horizontal, 24)
-
-            ProfileWalletCard(client: appState.apiClient)
-                .padding(.horizontal, 24)
-
-            HostPayoutCard(client: appState.apiClient)
-                .padding(.horizontal, 24)
-
-            VStack(alignment: .trailing, spacing: 10) {
-                Text("منشوراتك")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.52))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                PublishedMomentsGrid(moments: model.published) { moment in
-                    model.openedMoment = moment
-                }
-            }
-            .padding(.horizontal, 24)
-
-            if let message = model.photoMessage {
-                Text(message)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(Color(red: 1.0, green: 0.46, blue: 0.44))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.bottom, 12)
+            ScrollView(showsIndicators: false) {
+                content()
                     .padding(.horizontal, 24)
+                    .padding(.bottom, 28)
             }
-
-            profileStatus
-                .padding(.horizontal, 24)
-
-            Spacer(minLength: 24)
         }
+    }
+
+    private var accountHome: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .trailing, spacing: 16) {
+                Text("حسابي")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.top, 12)
+
+                IdentityCard(
+                    email: appState.session?.email,
+                    profile: model.profile,
+                    isSavingPhoto: model.isSavingPhoto,
+                    photoItem: $photoItem,
+                    onEdit: { pane = .editProfile }
+                )
+
+                AccountStatsRow(stats: model.stats) { kind in
+                    followList = kind
+                }
+
+                VStack(spacing: 10) {
+                    ProfileWalletHubRow(client: appState.apiClient) {
+                        pane = .wallet
+                    }
+                    HostEarningsHubRow(client: appState.apiClient) {
+                        pane = .earnings
+                    }
+                }
+
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text("الإعدادات")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    AccountHubLink(title: "الخصوصية", symbol: "lock.shield") { pane = .privacy }
+                    AccountHubLink(title: "الإشعارات", symbol: "bell") { pane = .notifications }
+                    AccountHubLink(title: "الحساب والأمان", symbol: "person.badge.key") { pane = .security }
+                    AccountHubLink(title: "المساعدة", symbol: "questionmark.circle") { pane = .help }
+                }
+
+                VStack(alignment: .trailing, spacing: 10) {
+                    Text("منشوراتك")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.52))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    PublishedMomentsGrid(moments: model.published) { moment in
+                        model.openedMoment = moment
+                    }
+                }
+
+                if let message = model.photoMessage {
+                    Text(message)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Color(red: 1.0, green: 0.46, blue: 0.44))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+                profileStatus
+                Spacer(minLength: 24)
+            }
+            .padding(.horizontal, 24)
         }
     }
 
@@ -240,7 +314,6 @@ private struct AccountSettingsView: View {
     let email: String?
     let phone: String?
     let isVerified: Bool
-    let onClose: () -> Void
 
     private enum Field: Hashable {
         case password
@@ -253,140 +326,106 @@ private struct AccountSettingsView: View {
     @State private var isBusy = false
     @State private var deleteStep = 0
     @FocusState private var focus: Field?
-    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .trailing, spacing: 18) {
-                HStack {
-                    Text("الإعدادات")
-                        .font(.system(size: 34, weight: .bold))
-                        .foregroundStyle(.white)
-                        .minimumScaleFactor(0.8)
-                    Spacer(minLength: 8)
-                    Button("إغلاق", action: onClose)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.78))
-                }
-                .padding(.top, 14)
-
-                VStack(spacing: 10) {
-                    SettingsRow(title: "البريد الإلكتروني", detail: emailText, ltr: true)
-                    SettingsRow(title: "رقم الجوال", detail: phoneText, muted: phoneMissing)
-                    SettingsRow(title: "حالة الحساب", detail: isVerified ? "موثّق" : "غير موثّق بعد")
-                }
-
-                VStack(alignment: .trailing, spacing: 10) {
-                    Text("كلمة المرور")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.52))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    Text("إذا نسيت كلمة المرور يُرسل رابط التعيين إلى بريدك المسجّل.")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.48))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    settingsAction(title: isBusy ? "جارٍ الإرسال" : "نسيت كلمة المرور") {
-                        Task { await sendReset() }
-                    }
-                    AuthField(
-                        title: "كلمة مرور جديدة",
-                        accessibilityHint: "ستة أحرف على الأقل",
-                        symbolName: "lock",
-                        text: $newPassword,
-                        focus: $focus,
-                        focusKey: .password,
-                        isSecure: true,
-                        textContentType: .newPassword,
-                        submitLabel: .next,
-                        palette: .dusk,
-                        onSubmit: { focus = .confirm }
-                    )
-                    AuthField(
-                        title: "تأكيد كلمة المرور",
-                        accessibilityHint: "أعد كتابة كلمة المرور",
-                        symbolName: "lock.fill",
-                        text: $confirmPassword,
-                        focus: $focus,
-                        focusKey: .confirm,
-                        isSecure: true,
-                        textContentType: .newPassword,
-                        submitLabel: .done,
-                        palette: .dusk,
-                        onSubmit: { Task { await savePassword() } }
-                    )
-                    settingsAction(title: isBusy ? "جارٍ الحفظ" : "تغيير كلمة المرور") {
-                        Task { await savePassword() }
-                    }
-                }
-                .padding(.top, 8)
-
-                VStack(alignment: .trailing, spacing: 10) {
-                    Text("حذف الحساب")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.52))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    Text("الحذف نهائي. يُمسح الحساب وكل اللحظات والمنشورات والمتابعات والمحادثات والبث من المصدر، ولا يمكن استرجاعها.")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(Color(red: 1.0, green: 0.46, blue: 0.44).opacity(0.92))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    if deleteStep == 0 {
-                        settingsAction(title: "حذف الحساب نهائيًا", danger: true) {
-                            deleteStep = 1
-                        }
-                    } else {
-                        Text("أكد أنك تريد مسح كل ما يخص هذا الحساب بلا رجعة.")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        settingsAction(title: isBusy ? "جارٍ الحذف" : "أفهم. احذف كل شيء الآن", danger: true) {
-                            Task { await wipeAccount() }
-                        }
-                        Button("إلغاء") { deleteStep = 0 }
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                }
-                .padding(.top, 8)
-
-                VStack(alignment: .trailing, spacing: 10) {
-                    Text("السياسات")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.52))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    settingsLink("سياسة الخصوصية", path: "/privacy")
-                    settingsLink("شروط الاستخدام", path: "/terms")
-                    settingsLink("معايير المجتمع", path: "/community")
-                    settingsLink("الدعم وحذف الحساب", path: "/support")
-                    settingsAction(title: "إبلاغ عن محتوى أو حساب") {
-                        openReportMail()
-                    }
-                }
-                .padding(.top, 8)
-
-                if let message, !message.isEmpty {
-                    Text(message)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-
-                Button(action: appState.signOut) {
-                    Text("تسجيل الخروج")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.86))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                }
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: ZohorTheme.radiusControl, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: ZohorTheme.radiusControl, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                }
-                .padding(.bottom, 16)
-                .accessibilityHint("إنهاء الجلسة الحالية")
+        VStack(alignment: .trailing, spacing: 18) {
+            VStack(spacing: 10) {
+                SettingsRow(title: "البريد الإلكتروني", detail: emailText, ltr: true)
+                SettingsRow(title: "رقم الجوال", detail: phoneText, muted: phoneMissing)
+                SettingsRow(title: "حالة الحساب", detail: isVerified ? "موثّق" : "غير موثّق بعد")
             }
-            .padding(.horizontal, 24)
+
+            VStack(alignment: .trailing, spacing: 10) {
+                Text("كلمة المرور")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Text("إذا نسيت كلمة المرور يُرسل رابط التعيين إلى بريدك المسجّل.")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.48))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                settingsAction(title: isBusy ? "جارٍ الإرسال" : "نسيت كلمة المرور") {
+                    Task { await sendReset() }
+                }
+                AuthField(
+                    title: "كلمة مرور جديدة",
+                    accessibilityHint: "ستة أحرف على الأقل",
+                    symbolName: "lock",
+                    text: $newPassword,
+                    focus: $focus,
+                    focusKey: .password,
+                    isSecure: true,
+                    textContentType: .newPassword,
+                    submitLabel: .next,
+                    palette: .dusk,
+                    onSubmit: { focus = .confirm }
+                )
+                AuthField(
+                    title: "تأكيد كلمة المرور",
+                    accessibilityHint: "أعد كتابة كلمة المرور",
+                    symbolName: "lock.fill",
+                    text: $confirmPassword,
+                    focus: $focus,
+                    focusKey: .confirm,
+                    isSecure: true,
+                    textContentType: .newPassword,
+                    submitLabel: .done,
+                    palette: .dusk,
+                    onSubmit: { Task { await savePassword() } }
+                )
+                settingsAction(title: isBusy ? "جارٍ الحفظ" : "تغيير كلمة المرور") {
+                    Task { await savePassword() }
+                }
+            }
+
+            VStack(alignment: .trailing, spacing: 10) {
+                Text("حذف الحساب")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.52))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Text("الحذف نهائي. يُمسح الحساب وكل اللحظات والمنشورات والمتابعات والمحادثات والبث من المصدر، ولا يمكن استرجاعها.")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color(red: 1.0, green: 0.46, blue: 0.44).opacity(0.92))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                if deleteStep == 0 {
+                    settingsAction(title: "حذف الحساب نهائيًا", danger: true) {
+                        deleteStep = 1
+                    }
+                } else {
+                    Text("أكد أنك تريد مسح كل ما يخص هذا الحساب بلا رجعة.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    settingsAction(title: isBusy ? "جارٍ الحذف" : "أفهم. احذف كل شيء الآن", danger: true) {
+                        Task { await wipeAccount() }
+                    }
+                    Button("إلغاء") { deleteStep = 0 }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
+
+            if let message, !message.isEmpty {
+                Text(message)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            Button(action: appState.signOut) {
+                Text("تسجيل الخروج")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.86))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: ZohorTheme.radiusControl, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: ZohorTheme.radiusControl, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            }
+            .accessibilityHint("إنهاء الجلسة الحالية")
         }
     }
 
@@ -401,27 +440,6 @@ private struct AccountSettingsView: View {
 
     private var phoneText: String {
         phoneMissing ? "لاحقًا" : phone!.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func settingsLink(_ title: String, path: String) -> some View {
-        settingsAction(title: title) {
-            if let url = URL(string: "https://www.lahzha.com\(path)") {
-                openURL(url)
-            }
-        }
-    }
-
-    private func openReportMail() {
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = "support@lahzha.com"
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "إبلاغ عن محتوى أو حساب"),
-            URLQueryItem(name: "body", value: "اسم المستخدم المخالف:\nرابط أو وصف:\n"),
-        ]
-        if let url = components.url {
-            openURL(url)
-        }
     }
 
     private func settingsAction(title: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
@@ -602,44 +620,6 @@ private struct SettingsRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title) \(detail)")
-    }
-}
-
-private struct ZohorSettingsMark: View {
-    var body: some View {
-        Canvas { context, size in
-            let ink = Color.white.opacity(0.90)
-            let ring = Path(ellipseIn: CGRect(
-                x: size.width * 0.18,
-                y: size.height * 0.18,
-                width: size.width * 0.64,
-                height: size.height * 0.64
-            ))
-            context.stroke(ring, with: .color(ink), lineWidth: 1.7)
-            let hub = Path(ellipseIn: CGRect(
-                x: size.width * 0.40,
-                y: size.height * 0.40,
-                width: size.width * 0.20,
-                height: size.height * 0.20
-            ))
-            context.stroke(hub, with: .color(ink), lineWidth: 1.5)
-            for angle in stride(from: 0.0, to: 360.0, by: 60.0) {
-                var tooth = Path()
-                let radians = Angle(degrees: angle).radians
-                let inner = CGPoint(
-                    x: size.width * 0.50 + cos(radians) * size.width * 0.22,
-                    y: size.height * 0.50 + sin(radians) * size.height * 0.22
-                )
-                let outer = CGPoint(
-                    x: size.width * 0.50 + cos(radians) * size.width * 0.36,
-                    y: size.height * 0.50 + sin(radians) * size.height * 0.36
-                )
-                tooth.move(to: inner)
-                tooth.addLine(to: outer)
-                context.stroke(tooth, with: .color(ink), style: StrokeStyle(lineWidth: 2.1, lineCap: .round))
-            }
-        }
-        .accessibilityHidden(true)
     }
 }
 
@@ -869,7 +849,7 @@ private struct AccountStatsRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Button { open(.followers) } label: { stat(stats.followers, "متابعون") }
+            Button { open(.followers) } label: { stat(stats.followers, "متابع") }
                 .buttonStyle(.plain)
                 .accessibilityHint("فتح قائمة المتابعين")
             divider
@@ -877,7 +857,7 @@ private struct AccountStatsRow: View {
                 .buttonStyle(.plain)
                 .accessibilityHint("فتح من تتابعهم")
             divider
-            stat(stats.likes, "إعجابات")
+            stat(stats.likes, "إعجاب")
         }
         .padding(.vertical, 12)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -890,7 +870,7 @@ private struct AccountStatsRow: View {
 
     private func stat(_ value: Int, _ title: String) -> some View {
         VStack(spacing: 4) {
-            Text("\(value)")
+            Text("\(max(0, value))")
                 .font(.title3.weight(.bold))
                 .monospacedDigit()
                 .foregroundStyle(.white)
@@ -899,7 +879,7 @@ private struct AccountStatsRow: View {
                 .foregroundStyle(.white.opacity(0.58))
         }
         .frame(maxWidth: .infinity)
-        .accessibilityLabel("\(title) \(value)")
+        .accessibilityLabel("\(title) \(max(0, value))")
     }
 
     private var divider: some View {
@@ -914,30 +894,30 @@ private struct IdentityCard: View {
     let profile: Profile?
     let isSavingPhoto: Bool
     @Binding var photoItem: PhotosPickerItem?
+    var onEdit: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 5) {
-                Text(displayName)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                if !handle.isEmpty {
-                    Text(handle)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.62))
+            VStack(alignment: .trailing, spacing: 8) {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(displayName)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    if !handle.isEmpty {
+                        Text(IdentityLabel.handle(handle))
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(1)
+                            .environment(\.layoutDirection, .leftToRight)
+                    }
                 }
-                if let email, !email.isEmpty {
-                    Text(email)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.38))
-                        .lineLimit(1)
-                        .environment(\.layoutDirection, .leftToRight)
-                }
+                Button("تعديل الملف", action: onEdit)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(ZohorTheme.gold)
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
             PhotosPicker(selection: $photoItem, matching: .images) {
                 ZStack(alignment: .bottomLeading) {
                     ProfileAvatar(name: displayName, imageURL: profile?.avatarUrl)
@@ -981,92 +961,74 @@ private struct ProfileWalletCard: View {
     @State private var coins = 0
     @State private var message: String?
     @State private var busy = false
-    @State private var isOpen = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: isOpen ? 12 : 0) {
-            Button {
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.88)) {
-                    isOpen.toggle()
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: isOpen ? "chevron.down" : "chevron.left")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                    Text("\(coins) ✦")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(ZohorTheme.gold)
-                    Spacer(minLength: 0)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("محفظتي")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.72))
-                        Text(isOpen ? "إخفاء الشحن" : "اضغط للشحن")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.42))
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("محفظتي")
-            .accessibilityHint(isOpen ? "إخفاء حزم الشحن" : "فتح حزم الشحن")
-            .accessibilityAddTraits(.isButton)
-
-            if isOpen {
-                Text("اختر حزمة ثم أكمل الدفع وارجع للتطبيق")
-                    .font(.caption)
+        VStack(alignment: .trailing, spacing: 12) {
+            HStack {
+                Text("\(coins)")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(ZohorTheme.gold)
+                    .monospacedDigit()
+                Text("لُمعة")
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.55))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                Spacer(minLength: 0)
+                Text("رصيدك")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+            }
 
-                ForEach(LiveLuxury.packs) { pack in
-                    Button {
-                        Task { await buy(pack) }
-                    } label: {
-                        HStack(spacing: 10) {
-                            Text(pack.priceFallback)
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(ZohorTheme.gold)
-                            Spacer(minLength: 0)
-                            VStack(alignment: .trailing, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    if pack.featured {
-                                        Text("الأكثر")
-                                            .font(.caption2.weight(.semibold))
-                                            .foregroundStyle(.white.opacity(0.45))
-                                    }
-                                    Text(pack.title)
-                                        .font(.subheadline.weight(.bold))
-                                        .foregroundStyle(.white)
-                                }
-                                if pack.bonusCoins > 0 {
-                                    Text("\(pack.baseCoins) + \(pack.bonusCoins)")
-                                        .font(.caption2)
+            Text("اختر حزمة ثم أكمل الدفع وارجع للتطبيق")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            ForEach(LiveLuxury.packs) { pack in
+                Button {
+                    Task { await buy(pack) }
+                } label: {
+                    HStack(spacing: 10) {
+                        Text(pack.priceFallback)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(ZohorTheme.gold)
+                        Spacer(minLength: 0)
+                        VStack(alignment: .trailing, spacing: 2) {
+                            HStack(spacing: 6) {
+                                if pack.featured {
+                                    Text("الأكثر")
+                                        .font(.caption2.weight(.semibold))
                                         .foregroundStyle(.white.opacity(0.45))
                                 }
-                                Text("\(pack.coins) لُمعة")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(ZohorTheme.gold)
+                                Text(pack.title)
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(.white)
                             }
-                        }
-                        .padding(12)
-                        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(pack.featured ? ZohorTheme.gold.opacity(0.4) : Color.white.opacity(0.08), lineWidth: 1)
+                            if pack.bonusCoins > 0 {
+                                Text("\(pack.baseCoins) + \(pack.bonusCoins)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.45))
+                            }
+                            Text("\(pack.coins) لُمعة")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(ZohorTheme.gold)
                         }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(busy || client == nil)
+                    .padding(12)
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(pack.featured ? ZohorTheme.gold.opacity(0.4) : Color.white.opacity(0.08), lineWidth: 1)
+                    }
                 }
+                .buttonStyle(.plain)
+                .disabled(busy || client == nil)
+            }
 
-                if let message {
-                    Text(message)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
+            if let message {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
         .padding(14)
@@ -1105,7 +1067,6 @@ private struct ProfileWalletCard: View {
         if let next = await client.resumePendingPaymobIfNeeded() {
             coins = next
             message = "تم تأكيد شحن اللمعات."
-            isOpen = true
         } else {
             await reload()
         }
@@ -1126,6 +1087,11 @@ private struct HostPayoutCard: View {
             Text("أرباح البث")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.52))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            Text("IBAN واسم الحساب البنكي هنا فقط، داخل طرق السحب.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.45))
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
             if let summary {
@@ -1237,6 +1203,298 @@ private struct HostPayoutCard: View {
         } catch {
             message = (error as? LocalizedError)?.errorDescription ?? "تعذر طلب السحب."
         }
+    }
+}
+
+private struct AccountHubLink: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.35))
+                Spacer(minLength: 8)
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Image(systemName: symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 22)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+}
+
+private struct ProfileWalletHubRow: View {
+    let client: ZohorAPIClient?
+    let open: () -> Void
+    @State private var coins = 0
+
+    var body: some View {
+        Button(action: open) {
+            HStack {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.35))
+                Text("عرض المحفظة")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("المحفظة")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.62))
+                    Text("\(max(0, coins)) لُمعة")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(ZohorTheme.gold)
+                        .monospacedDigit()
+                }
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .task { coins = await client?.liveWallet() ?? 0 }
+        .accessibilityLabel("المحفظة")
+        .accessibilityHint("فتح شحن اللمعات")
+    }
+}
+
+private struct HostEarningsHubRow: View {
+    let client: ZohorAPIClient?
+    let open: () -> Void
+    @State private var amount = 0.0
+
+    var body: some View {
+        Button(action: open) {
+            HStack {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.35))
+                Text("عرض الأرباح")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.5))
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("أرباح البث")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.62))
+                    Text("الرصيد القابل للسحب")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.42))
+                    Text(String(format: "%.2f ر.س", max(0, amount)))
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                        .monospacedDigit()
+                }
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .task {
+            amount = (try? await client?.hostPayoutSummary())?.withdrawableSar ?? 0
+        }
+        .accessibilityLabel("أرباح البث")
+        .accessibilityHint("فتح تفاصيل الأرباح والسحب")
+    }
+}
+
+private struct IdentityEditorView: View {
+    let profile: Profile?
+    let onSave: (String, String) async -> String?
+
+    private enum Field: Hashable { case name, handle }
+
+    @State private var displayName = ""
+    @State private var handle = ""
+    @State private var message: String?
+    @State private var busy = false
+    @FocusState private var focus: Field?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 14) {
+            Text("الاسم يظهر للناس. المعرّف ثابت ويُغيَّر مرة واحدة في السنة.")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.55))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            AuthField(
+                title: "الاسم الظاهر",
+                accessibilityHint: "عربي أو كما تريد أن تظهر",
+                symbolName: "person",
+                text: $displayName,
+                focus: $focus,
+                focusKey: .name,
+                forcesLTR: false,
+                autocapitalization: .words,
+                palette: .dusk,
+                onSubmit: { focus = .handle }
+            )
+
+            AuthField(
+                title: "المعرّف",
+                accessibilityHint: "حروف إنجليزية وأرقام",
+                symbolName: "at",
+                text: $handle,
+                focus: $focus,
+                focusKey: .handle,
+                isDisabled: !(profile?.canChangeUsername ?? true),
+                palette: .dusk
+            )
+
+            if profile?.canChangeUsername != true {
+                Text(unlockText)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            Button {
+                Task { await save() }
+            } label: {
+                Text(busy ? "جارٍ الحفظ" : "حفظ")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .disabled(busy)
+            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: ZohorTheme.radiusControl, style: .continuous))
+
+            if let message {
+                Text(message)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Color(red: 1.0, green: 0.46, blue: 0.44))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+        .onAppear {
+            displayName = profile?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? profile?.username
+                ?? ""
+            handle = profile?.username ?? ""
+        }
+    }
+
+    private var unlockText: String {
+        if let date = profile?.usernameUnlockAt {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "ar")
+            formatter.dateStyle = .medium
+            return "يمكنك تغيير المعرّف بعد \(formatter.string(from: date))."
+        }
+        return "المعرّف يُغيَّر مرة واحدة في السنة."
+    }
+
+    private func save() async {
+        busy = true
+        defer { busy = false }
+        message = await onSave(displayName, handle)
+    }
+}
+
+private struct AccountLinkList: View {
+    enum Kind { case privacy, help }
+    let kind: Kind
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 10) {
+            switch kind {
+            case .privacy:
+                link("سياسة الخصوصية", "/privacy")
+                link("شروط الاستخدام", "/terms")
+                link("معايير المجتمع", "/community")
+            case .help:
+                link("الدعم وحذف الحساب", "/support")
+                Button(action: report) {
+                    row("إبلاغ عن محتوى أو حساب")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func link(_ title: String, _ path: String) -> some View {
+        Button {
+            if let url = URL(string: "https://www.lahzha.com\(path)") {
+                openURL(url)
+            }
+        } label: {
+            row(title)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func row(_ title: String) -> some View {
+        HStack {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.35))
+            Spacer()
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func report() {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = "support@lahzha.com"
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "إبلاغ عن محتوى أو حساب"),
+            URLQueryItem(name: "body", value: "اسم المستخدم المخالف:\nرابط أو وصف:\n"),
+        ]
+        if let url = components.url {
+            openURL(url)
+        }
+    }
+}
+
+private struct AccountNotificationsView: View {
+    @AppStorage("lahza.notify.hearts") private var hearts = true
+    @AppStorage("lahza.notify.gifts") private var gifts = true
+    @AppStorage("lahza.notify.follows") private var follows = true
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 12) {
+            Text("هذه التفضيلات على جهازك. تنبيهات السيرفر تُربط لاحقًا.")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            toggle("قلوب البث", $hearts)
+            toggle("الهدايا", $gifts)
+            toggle("المتابعون", $follows)
+        }
+    }
+
+    private func toggle(_ title: String, _ value: Binding<Bool>) -> some View {
+        Toggle(isOn: value) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .tint(ZohorTheme.gold)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .environment(\.layoutDirection, .rightToLeft)
     }
 }
 

@@ -17,6 +17,24 @@ function metaString(user: unknown, key: string) {
   return String(meta[key] || "").trim();
 }
 
+function normalizeHandle(raw: string) {
+  return String(raw || "")
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase();
+}
+
+function isValidHandle(value: string) {
+  return /^[a-z][a-z0-9._]{2,23}$/.test(value);
+}
+
+function usernameUnlockAt(changedAt: string | null) {
+  if (!changedAt) return null;
+  const start = Date.parse(changedAt);
+  if (!Number.isFinite(start)) return null;
+  return new Date(start + 365 * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function normalizeSupabaseUrl(raw: string) {
   let s = String(raw || "").trim();
   if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1).trim();
@@ -221,9 +239,21 @@ async function getBearerProfile(req: NextRequest) {
       return Response.json({ ok: false, code: "server_misconfig", message: "SUPABASE_SERVICE_ROLE_KEY غير موجود." }, { status: 500 });
     }
 
-    let { data, error } = await admin.from("profiles").select("id,username,phone,display_name,avatar_url").eq("id", meId).maybeSingle();
-    if (error && (isMissingColumnError(String(error.message || ""), "display_name") || isMissingColumnError(String(error.message || ""), "avatar_url"))) {
-      ({ data, error } = await admin.from("profiles").select("id,username,phone").eq("id", meId).maybeSingle());
+    let { data, error } = await admin
+      .from("profiles")
+      .select("id,username,phone,display_name,avatar_url,username_changed_at")
+      .eq("id", meId)
+      .maybeSingle();
+    if (
+      error &&
+      (isMissingColumnError(String(error.message || ""), "display_name") ||
+        isMissingColumnError(String(error.message || ""), "avatar_url") ||
+        isMissingColumnError(String(error.message || ""), "username_changed_at"))
+    ) {
+      ({ data, error } = await admin.from("profiles").select("id,username,phone,display_name,avatar_url").eq("id", meId).maybeSingle());
+      if (error && (isMissingColumnError(String(error.message || ""), "display_name") || isMissingColumnError(String(error.message || ""), "avatar_url"))) {
+        ({ data, error } = await admin.from("profiles").select("id,username,phone").eq("id", meId).maybeSingle());
+      }
     }
     if (error) {
       const msg = String(error.message || "");
@@ -237,7 +267,25 @@ async function getBearerProfile(req: NextRequest) {
     const username = String((data as { username?: unknown } | null)?.username || "").trim() || metaString(user, "username") || deriveUsername(user);
     const displayName = String((data as { display_name?: unknown } | null)?.display_name || "").trim();
     const avatarUrl = String((data as { avatar_url?: unknown } | null)?.avatar_url || "").trim() || deriveAvatarUrl(user);
-    return Response.json({ ok: true, profile: { id: meId, username, phone, displayName: displayName || null, avatarUrl: avatarUrl || null } }, { status: 200 });
+    const usernameChangedAt = String((data as { username_changed_at?: unknown } | null)?.username_changed_at || "").trim() || null;
+    const unlockAt = usernameUnlockAt(usernameChangedAt);
+    const canChangeUsername = !unlockAt || Date.parse(unlockAt) <= Date.now();
+    return Response.json(
+      {
+        ok: true,
+        profile: {
+          id: meId,
+          username,
+          phone,
+          displayName: displayName || null,
+          avatarUrl: avatarUrl || null,
+          usernameChangedAt,
+          usernameUnlockAt: unlockAt,
+          canChangeUsername,
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const authRes = authErrorResponse(e);
     if (authRes) return authRes;
@@ -284,74 +332,147 @@ async function postBearerProfile(req: NextRequest) {
       }
     }
 
-    const { data: meProfile, error: meErr } = await admin.from("profiles").select("id,username,display_name,created_at").eq("id", meId).maybeSingle();
+    const { data: meProfile, error: meErr } = await admin
+      .from("profiles")
+      .select("id,username,display_name,created_at,username_changed_at")
+      .eq("id", meId)
+      .maybeSingle();
     if (meErr) {
       const msg = String(meErr.message || "");
+      if (isMissingColumnError(msg, "username_changed_at")) {
+        const fallback = await admin.from("profiles").select("id,username,display_name,created_at").eq("id", meId).maybeSingle();
+        if (fallback.error) {
+          const fallbackMsg = String(fallback.error.message || "");
+          if (isMissingColumnError(fallbackMsg, "phone")) {
+            return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
+          }
+          return Response.json({ ok: false, code: "query_failed", message: fallback.error.message }, { status: 500 });
+        }
+        return await applyProfileUpdate(admin, meId, user, {
+          phone,
+          requestedUsername,
+          displayName,
+          avatarUrl,
+          meProfile: fallback.data,
+        });
+      }
       if (isMissingColumnError(msg, "phone")) {
         return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
       }
       return Response.json({ ok: false, code: "query_failed", message: meErr.message }, { status: 500 });
     }
 
-    const existingUsername = String((meProfile as { username?: unknown } | null)?.username || "").trim();
-    const existingName = String((meProfile as { display_name?: unknown } | null)?.display_name || "").trim();
-    if (
-      existingUsername &&
-      requestedUsername &&
-      requestedUsername.toLowerCase() !== existingUsername.toLowerCase() &&
-      displayName &&
-      displayName !== existingName
-    ) {
-      return Response.json(
-        { ok: false, code: "identity_locked", message: "لا يمكن استبدال هوية حساب قائم من تسجيل آخر." },
-        { status: 409 }
-      );
-    }
-
-    const username = requestedUsername || existingUsername || deriveUsername(user);
-    if (username) {
-      const { data: takenName } = await admin.from("profiles").select("id,username").neq("id", meId);
-      const wanted = username.toLowerCase();
-      const nameTaken = (takenName || []).some((row) => String((row as { username?: unknown }).username || "").trim().toLowerCase() === wanted);
-      if (nameTaken) {
-        return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
-      }
-    }
-
-    const payload: Record<string, unknown> = { username };
-    if (phone) payload.phone = phone;
-    if (displayName) payload.display_name = displayName;
-    if (avatarUrl) payload.avatar_url = avatarUrl;
-
-    let error = meProfile
-      ? (await admin.from("profiles").update(payload).eq("id", meId)).error
-      : (await admin.from("profiles").insert({ id: meId, ...payload })).error;
-    if (error && (isMissingColumnError(String(error.message || ""), "display_name") || isMissingColumnError(String(error.message || ""), "avatar_url"))) {
-      const slim: Record<string, unknown> = { username };
-      if (phone) slim.phone = phone;
-      error = meProfile
-        ? (await admin.from("profiles").update(slim).eq("id", meId)).error
-        : (await admin.from("profiles").insert({ id: meId, ...slim })).error;
-    }
-
-    if (error) {
-      const msg = String(error.message || "");
-      if (isMissingColumnError(msg, "phone")) {
-        return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
-      }
-      if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
-        return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
-      }
-      return Response.json({ ok: false, code: "update_failed", message: error.message }, { status: 500 });
-    }
-
-    return Response.json({ ok: true, phone, username, displayName, avatarUrl }, { status: 200 });
+    return await applyProfileUpdate(admin, meId, user, {
+      phone,
+      requestedUsername,
+      displayName,
+      avatarUrl,
+      meProfile,
+    });
   } catch (e: unknown) {
     const authRes = authErrorResponse(e);
     if (authRes) return authRes;
     const message = e instanceof Error ? e.message : typeof e === "string" ? e : "Internal error";
     return Response.json({ ok: false, code: "server_error", message }, { status: 500 });
   }
+}
+
+async function applyProfileUpdate(
+  admin: NonNullable<ReturnType<typeof buildSupabaseAdmin>>,
+  meId: string,
+  user: unknown,
+  input: {
+    phone: string;
+    requestedUsername: string;
+    displayName: string;
+    avatarUrl: string;
+    meProfile: { username?: unknown; display_name?: unknown; username_changed_at?: unknown } | null;
+  }
+) {
+  const existingUsername = String(input.meProfile?.username || "").trim();
+  const requested = normalizeHandle(input.requestedUsername);
+  const usernameChanging = Boolean(requested && existingUsername && requested !== existingUsername.toLowerCase());
+
+  if (usernameChanging) {
+    if (!isValidHandle(requested)) {
+      return Response.json(
+        { ok: false, code: "bad_handle", message: "المعرّف حروف إنجليزية وأرقام فقط، ويبدأ بحرف." },
+        { status: 400 }
+      );
+    }
+    const unlockAt = usernameUnlockAt(String(input.meProfile?.username_changed_at || "").trim() || null);
+    if (unlockAt && Date.parse(unlockAt) > Date.now()) {
+      return Response.json(
+        { ok: false, code: "username_year", message: "المعرّف يُغيَّر مرة واحدة في السنة." },
+        { status: 409 }
+      );
+    }
+  }
+
+  const username = usernameChanging ? requested : existingUsername || requested || deriveUsername(user);
+  if (usernameChanging || (!existingUsername && username)) {
+    const { data: takenName } = await admin.from("profiles").select("id,username").neq("id", meId);
+    const wanted = username.toLowerCase();
+    const nameTaken = (takenName || []).some(
+      (row) => String((row as { username?: unknown }).username || "").trim().toLowerCase() === wanted
+    );
+    if (nameTaken) {
+      return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
+    }
+  }
+
+  const payload: Record<string, unknown> = {};
+  if (usernameChanging || !input.meProfile) payload.username = username;
+  if (input.phone) payload.phone = input.phone;
+  if (input.displayName) payload.display_name = input.displayName;
+  if (input.avatarUrl) payload.avatar_url = input.avatarUrl;
+  if (usernameChanging) payload.username_changed_at = new Date().toISOString();
+
+  if (!Object.keys(payload).length) {
+    return Response.json({ ok: false, code: "bad_request", message: "لا يوجد ما يُحفظ." }, { status: 400 });
+  }
+
+  let error = input.meProfile
+    ? (await admin.from("profiles").update(payload).eq("id", meId)).error
+    : (await admin.from("profiles").insert({ id: meId, username, ...payload })).error;
+  if (
+    error &&
+    (isMissingColumnError(String(error.message || ""), "display_name") ||
+      isMissingColumnError(String(error.message || ""), "avatar_url") ||
+      isMissingColumnError(String(error.message || ""), "username_changed_at"))
+  ) {
+    const slim: Record<string, unknown> = {};
+    if (payload.username) slim.username = payload.username;
+    if (input.phone) slim.phone = input.phone;
+    if (input.displayName && !isMissingColumnError(String(error.message || ""), "display_name")) {
+      slim.display_name = input.displayName;
+    }
+    if (input.avatarUrl && !isMissingColumnError(String(error.message || ""), "avatar_url")) {
+      slim.avatar_url = input.avatarUrl;
+    }
+    error = input.meProfile
+      ? (await admin.from("profiles").update(slim).eq("id", meId)).error
+      : (await admin.from("profiles").insert({ id: meId, username, ...slim })).error;
+  }
+
+  if (error) {
+    const msg = String(error.message || "");
+    if (isMissingColumnError(msg, "phone")) {
+      return Response.json({ ok: false, code: "missing_phone_column", message: 'أضف عمود phone في جدول profiles أولًا.' }, { status: 400 });
+    }
+    if (msg.toLowerCase().includes("username_year_locked") || msg.includes("restrict_violation")) {
+      return Response.json({ ok: false, code: "username_year", message: "المعرّف يُغيَّر مرة واحدة في السنة." }, { status: 409 });
+    }
+    if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique")) {
+      return Response.json({ ok: false, code: "username_taken", message: "اسم المستخدم مستخدم." }, { status: 409 });
+    }
+    return Response.json({ ok: false, code: "update_failed", message: error.message }, { status: 500 });
+  }
+
+  return Response.json(
+    { ok: true, phone: input.phone, username, displayName: input.displayName, avatarUrl: input.avatarUrl },
+    { status: 200 }
+  );
 }
 
 export async function GET(req: NextRequest) {

@@ -26,6 +26,8 @@ actor ZohorAPIClient {
     private let supabaseAnonKey: String
     private let agoraAppId: String
     private let agoraAppCertificate: String
+
+    var liveAgoraAppId: String { agoraAppId }
     private let sessionProvider: @Sendable () async -> UserSession?
     private let sessionRefresher: @Sendable () async -> Bool
 
@@ -410,11 +412,19 @@ actor ZohorAPIClient {
 
     func listLiveHosts() async -> [LiveHost]? {
         if writesViaBFF {
-            struct Body: Encodable { let action = "list" }
-            struct Envelope: Decodable { let rooms: [LiveRoomRow]? }
-            if let data = try? await requestPlainJSON(path: "/live/start", body: Body()),
-               let rows = try? JSONDecoder().decode(Envelope.self, from: data).rooms {
-                return rows.compactMap(\.host)
+            do {
+                struct Body: Encodable { let action = "list" }
+                struct Envelope: Decodable { let rooms: [LiveRoomRow]? }
+                let data = try await requestPlainJSON(path: "/live/start", body: Body())
+                if let rows = try? JSONDecoder().decode(Envelope.self, from: data).rooms {
+                    return rows.compactMap(\.host)
+                }
+            } catch {
+                // Do not fall through to public REST after auth failure — that shows rooms
+                // while voice/start still returns 401 and confuses the host.
+                if Self.isUnauthorized(error) {
+                    return []
+                }
             }
         }
         do {
@@ -428,6 +438,9 @@ actor ZohorAPIClient {
             )
             return await withIdentitiesById(rows.compactMap(\.host))
         } catch {
+            if Self.isUnauthorized(error) {
+                return []
+            }
             let rows: [LiveRoomRow] = (try? await supabaseGet(
                 path: "/rest/v1/live_rooms",
                 query: [
@@ -466,6 +479,16 @@ actor ZohorAPIClient {
         throw ZohorAPIError.server(code: "backdrop", message: decoded?.message ?? "تعذر حفظ الخلفية.", status: 400)
     }
 
+    func setLiveFilter(_ filter: LiveVideoFilter) async throws {
+        struct Body: Encodable { let action = "filter"; let filterKey: String }
+        struct Response: Decodable { let room: LiveRoomRow?; let message: String? }
+        let data = try await requestPlainJSON(path: "/live/start", body: Body(filterKey: filter.serverKey))
+        let decoded = (try? JSONDecoder.zohor.decode(Response.self, from: data))
+            ?? (try? JSONDecoder().decode(Response.self, from: data))
+        if decoded?.room?.host != nil { return }
+        throw ZohorAPIError.server(code: "filter", message: decoded?.message ?? "تعذر حفظ الفلتر.", status: 400)
+    }
+
     func listVoiceRooms() async -> [VoiceRoom] {
         struct Body: Encodable { let action = "list" }
         struct Row: Decodable {
@@ -494,8 +517,8 @@ actor ZohorAPIClient {
         }
     }
 
-    func voiceRoomThrowing(action: String, hostUserId: String? = nil, userId: String? = nil, text: String? = nil, backdropUrl: String? = nil) async throws -> VoiceBoard {
-        struct Body: Encodable { let action: String; let hostUserId: String?; let userId: String?; let text: String?; let backdropUrl: String? }
+    func voiceRoomThrowing(action: String, hostUserId: String? = nil, userId: String? = nil, text: String? = nil, backdropUrl: String? = nil, roomId: String? = nil) async throws -> VoiceBoard {
+        struct Body: Encodable { let action: String; let hostUserId: String?; let userId: String?; let text: String?; let backdropUrl: String?; let roomId: String? }
         struct RoomRow: Decodable {
             let id: String?
             let hostUserId: String?
@@ -518,6 +541,17 @@ actor ZohorAPIClient {
             let displayName: String?
             let text: String?
         }
+        struct HandoffRow: Decodable {
+            let id: String?
+            let fromUserId: String?
+            let toUserId: String?
+            let fromName: String?
+            let toName: String?
+            let status: String?
+            let kind: String?
+            let role: String?
+            let expiresAt: String?
+        }
         struct Envelope: Decodable {
             let room: RoomRow?
             let seats: [SeatRow]?
@@ -532,10 +566,11 @@ actor ZohorAPIClient {
             let muted: Bool?
             let moderatorIds: [String]?
             let mutedIds: [String]?
+            let handoff: HandoffRow?
         }
         let data = try await requestPlainJSON(
             path: "/live/voice",
-            body: Body(action: action, hostUserId: hostUserId, userId: userId, text: text, backdropUrl: backdropUrl)
+            body: Body(action: action, hostUserId: hostUserId, userId: userId, text: text, backdropUrl: backdropUrl, roomId: roomId)
         )
         let decoded = try JSONDecoder().decode(Envelope.self, from: data)
         let room: VoiceRoom? = {
@@ -549,7 +584,7 @@ actor ZohorAPIClient {
                 backdropUrl: IdentityMedia.url(row.backdropUrl)
             )
         }()
-        let seats = (decoded.seats ?? []).compactMap { row -> VoiceSeat? in
+        let seats = await withVoiceSeatIdentities((decoded.seats ?? []).compactMap { row -> VoiceSeat? in
             guard let id = row.userId, !id.isEmpty else { return nil }
             return VoiceSeat(
                 userId: id,
@@ -558,7 +593,7 @@ actor ZohorAPIClient {
                 displayName: row.displayName ?? "",
                 avatarUrl: IdentityMedia.url(row.avatarUrl)
             )
-        }
+        })
         let comments = (decoded.comments ?? []).compactMap { row -> LiveComment? in
             let text = (row.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
@@ -584,7 +619,109 @@ actor ZohorAPIClient {
                 muted: decoded.muted ?? false,
                 moderatorIds: decoded.moderatorIds ?? [],
                 mutedIds: decoded.mutedIds ?? []
+            ),
+            handoff: handoffFrom(
+                id: decoded.handoff?.id,
+                fromUserId: decoded.handoff?.fromUserId,
+                toUserId: decoded.handoff?.toUserId,
+                fromName: decoded.handoff?.fromName,
+                toName: decoded.handoff?.toName,
+                status: decoded.handoff?.status,
+                kind: decoded.handoff?.kind,
+                role: decoded.handoff?.role,
+                expiresAt: decoded.handoff?.expiresAt
             )
+        )
+    }
+
+    func liveHandoffThrowing(action: String, hostUserId: String? = nil, userId: String? = nil) async throws -> LiveHandoffBoard {
+        struct Body: Encodable { let action: String; let hostUserId: String?; let userId: String? }
+        struct HandoffRow: Decodable {
+            let id: String?
+            let fromUserId: String?
+            let toUserId: String?
+            let fromName: String?
+            let toName: String?
+            let status: String?
+            let kind: String?
+            let role: String?
+            let expiresAt: String?
+        }
+        struct Envelope: Decodable {
+            let handoff: HandoffRow?
+            let canModerate: Bool?
+            let isHost: Bool?
+            let isModerator: Bool?
+            let kicked: Bool?
+            let banned: Bool?
+            let muted: Bool?
+            let moderatorIds: [String]?
+            let mutedIds: [String]?
+            let message: String?
+        }
+        let data = try await requestPlainJSON(path: "/live/handoff", body: Body(action: action, hostUserId: hostUserId, userId: userId))
+        let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+        if let message = decoded.message, decoded.handoff == nil, action != "get" {
+            throw ZohorAPIError.server(code: "handoff_failed", message: message, status: 400)
+        }
+        return LiveHandoffBoard(
+            handoff: handoffFrom(
+                id: decoded.handoff?.id,
+                fromUserId: decoded.handoff?.fromUserId,
+                toUserId: decoded.handoff?.toUserId,
+                fromName: decoded.handoff?.fromName,
+                toName: decoded.handoff?.toName,
+                status: decoded.handoff?.status,
+                kind: decoded.handoff?.kind,
+                role: decoded.handoff?.role,
+                expiresAt: decoded.handoff?.expiresAt
+            ),
+            staff: LiveRoomStaff(
+                canModerate: decoded.canModerate ?? false,
+                isHost: decoded.isHost ?? false,
+                isModerator: decoded.isModerator ?? false,
+                kicked: decoded.kicked ?? false,
+                banned: decoded.banned ?? false,
+                muted: decoded.muted ?? false,
+                moderatorIds: decoded.moderatorIds ?? [],
+                mutedIds: decoded.mutedIds ?? []
+            )
+        )
+    }
+
+    private func handoffFrom(
+        id: String?,
+        fromUserId: String?,
+        toUserId: String?,
+        fromName: String?,
+        toName: String?,
+        status: String?,
+        kind: String?,
+        role: String?,
+        expiresAt: String?
+    ) -> RoomHandoff? {
+        let handoffId = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let from = fromUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let to = toUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !handoffId.isEmpty, !from.isEmpty, !to.isEmpty else { return nil }
+        let parsedExpiry: Date? = {
+            guard let raw = expiresAt?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: raw) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: raw)
+        }()
+        return RoomHandoff(
+            id: handoffId,
+            fromUserId: from,
+            toUserId: to,
+            fromName: fromName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            toName: toName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            status: status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "pending",
+            kind: kind?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            role: role?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            expiresAt: parsedExpiry
         )
     }
 
@@ -689,17 +826,27 @@ actor ZohorAPIClient {
             let id: String?
             let createdBy: String?
             let seekingSeconds: Int?
+            let pendingInviteSeconds: Int?
             let mode: String?
             let teamA: Int?
             let teamB: Int?
+            let channel: String?
         }
         let data = try await requestPlainJSON(path: "/live/challenge", body: Body(action: action, userId: userId, hostUserId: hostUserId, challengeId: challengeId, mode: mode))
         let decoded = try JSONDecoder().decode(Envelope.self, from: data)
+        let challengeIdValue = decoded.challenge?.id ?? ""
+        let channelValue: String = {
+            let raw = (decoded.challenge?.channel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty { return raw }
+            let compact = challengeIdValue.replacingOccurrences(of: "-", with: "")
+            return compact.isEmpty ? "" : String(("c" + compact).prefix(32))
+        }()
         var board = LiveChallenge(
-            id: decoded.challenge?.id ?? "",
+            id: challengeIdValue,
             createdBy: decoded.challenge?.createdBy ?? "",
             mode: LiveChallengeMode(rawValue: decoded.challenge?.mode ?? "") ?? .duel,
             seekingSeconds: decoded.challenge?.seekingSeconds ?? 0,
+            pendingInviteSeconds: max(0, decoded.challenge?.pendingInviteSeconds ?? 0),
             incoming: {
                 guard let row = decoded.incoming, let challengeId = row.challengeId, !challengeId.isEmpty else { return nil }
                 return LiveIncoming(
@@ -710,7 +857,8 @@ actor ZohorAPIClient {
                 )
             }(),
             teamA: decoded.challenge?.teamA ?? 0,
-            teamB: decoded.challenge?.teamB ?? 0
+            teamB: decoded.challenge?.teamB ?? 0,
+            channel: channelValue
         )
         for row in decoded.seats ?? [] {
             let index = row.seat ?? 0
@@ -734,7 +882,8 @@ actor ZohorAPIClient {
     func agoraJoin(channel: String, role: String = "audience") async throws -> (appId: String, token: String, uid: UInt) {
         struct Body: Encodable { let channel: String; let uid: UInt; let role: String }
         struct Envelope: Decodable { let token: String?; let appId: String?; let message: String? }
-        let uid = stableAgoraUid()
+        let session = await sessionProvider()
+        let uid = Self.agoraUid(forUserId: session?.userId ?? "")
         if writesViaBFF {
             if let data = try? await requestPlainJSON(
                 path: "/api/agora/token",
@@ -758,13 +907,21 @@ actor ZohorAPIClient {
         throw ZohorAPIError.server(code: "agora", message: "تعذر دخول البث.", status: 400)
     }
 
+    /// Deterministic Agora UID from user id — required to map challenge seats to remote video.
+    static func agoraUid(forUserId userId: String) -> UInt {
+        let hex = userId.lowercased().filter { $0.isHexDigit }
+        guard !hex.isEmpty else { return 1 }
+        var hash: UInt64 = 2_166_136_261
+        for byte in hex.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 16_777_619
+        }
+        return UInt(hash % 900_000_000) + 1
+    }
+
     private func stableAgoraUid() -> UInt {
-        let key = "lahza.agora.uid"
-        let stored = UserDefaults.standard.integer(forKey: key)
-        if stored > 0 { return UInt(stored) }
-        let uid = Int.random(in: 1...999_999_999)
-        UserDefaults.standard.set(uid, forKey: key)
-        return UInt(uid)
+        // Kept for any legacy call sites; prefer agoraUid(forUserId:).
+        1
     }
 
     func liveEngage(action: String = "get", hostUserId: String, text: String? = nil) async -> LiveEngageBoard {
@@ -1323,6 +1480,20 @@ actor ZohorAPIClient {
             if let ident = identity(for: host.userId, username: "", in: names) {
                 if !ident.username.isEmpty { next.username = ident.username }
                 next.displayName = ident.displayName
+                if let avatar = ident.avatarUrl { next.avatarUrl = avatar }
+            }
+            return next
+        }
+    }
+
+    private func withVoiceSeatIdentities(_ seats: [VoiceSeat]) async -> [VoiceSeat] {
+        guard !seats.isEmpty else { return seats }
+        let names = await publicIdentities(for: seats.map(\.userId), usernames: seats.map(\.username))
+        return seats.map { seat in
+            var next = seat
+            if let ident = identity(for: seat.userId, username: seat.username, in: names) {
+                if next.username.isEmpty, !ident.username.isEmpty { next.username = ident.username }
+                if !ident.displayName.isEmpty { next.displayName = ident.displayName }
                 if let avatar = ident.avatarUrl { next.avatarUrl = avatar }
             }
             return next
@@ -2248,6 +2419,7 @@ actor ZohorAPIClient {
             || blob.contains("يلزم تسجيل")
             || blob.contains("jwt")
             || blob.contains("انتهت الجلسة")
+            || blob.contains("تعذر التحقق من الجلسة")
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
